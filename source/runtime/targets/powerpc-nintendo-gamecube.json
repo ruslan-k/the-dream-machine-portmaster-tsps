@@ -1,0 +1,42 @@
+{
+  "llvm-target": "powerpc-unknown-eabi",
+  "target-pointer-width": "32",
+  "data-layout": "E-m:e-p:32:32-i64:64-n32",
+  "arch": "powerpc",
+  "cpu": "750",
+  "env": "",
+  "os": "gamecube",
+  "vendor": "nintendo",
+  "executables": true,
+  "exe-suffix": ".elf",
+  "dynamic-linking": false,
+  "has-rpath": false,
+  "has-thread-local": false,
+  "linker": "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-gcc",
+  "linker-flavor": "gcc",
+  "features": "+paired-singles",
+  "pre-link-args": {
+    "gcc": [
+      "-mogc",
+      "-mcpu=750",
+      "-meabi",
+      "-mhard-float",
+      "-L", "/opt/devkitpro/libogc/lib/cube",
+      "-L", "/opt/devkitpro/portlibs/gamecube/lib"
+    ]
+  },
+  "post-link-args": {
+    "gcc": [
+      "-logc", "-lm", "-lc", "-lgcc"
+    ]
+  },
+  "target-endian": "big",
+  "target-c-int-width": "32",
+  "target-family": ["unix"],
+  "max-atomic-width": 32,
+  "panic-strategy": "abort",
+  "position-independent-executables": false,
+  "relocation-model": "static",
+  "requires-uwtable": false,
+  "trap-unreachable": true
+}

@@ -1,0 +1,67 @@
+name: Build – PS Vita
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'ruffle_render_glow/**'
+      - 'frontend-utils/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - '.github/workflows/vita.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-vita:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rust-lang/rust:nightly   # vitasdk needs nightly
+    env:
+      VITASDK: /usr/local/vitasdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install vitasdk
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            cmake git python3 bzip2 libxml2-dev \
+            texinfo wget tar libgmp-dev libmpfr-dev libmpc-dev \
+            ca-certificates pkg-config
+          git clone --depth=1 https://github.com/vitasdk/vdpm /tmp/vdpm
+          cd /tmp/vdpm && ./bootstrap-vitasdk.sh
+          echo "/usr/local/vitasdk/bin" >> $GITHUB_PATH
+
+      - name: Install vitaGL + SDL2
+        run: |
+          vdpm vitaGL SDL2
+
+      - name: Install cargo-vita
+        run: cargo install cargo-vita
+
+      - name: Add armv7-sony-vita target
+        run: rustup target add armv7-sony-vita-newlibeabihf
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: vita-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: vita-cargo-
+
+      - name: Build VPK
+        run: bash scripts/build_vita.sh
+
+      - name: Upload VPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-vita
+          path: target/armv7-sony-vita-newlibeabihf/vita/ruffle4consoles.vpk
+          if-no-files-found: warn

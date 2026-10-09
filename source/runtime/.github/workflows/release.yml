@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+
+jobs:
+  # Trigger all platform builds and collect their artifacts
+  build-vita:
+    uses: ./.github/workflows/vita.yml
+  build-switch:
+    uses: ./.github/workflows/switch.yml
+  build-ps4:
+    uses: ./.github/workflows/ps4.yml
+  build-psp:
+    uses: ./.github/workflows/psp.yml
+  build-3ds:
+    uses: ./.github/workflows/3ds.yml
+  build-ps3:
+    uses: ./.github/workflows/ps3.yml
+  build-wii:
+    uses: ./.github/workflows/wii.yml
+  build-wiiu:
+    uses: ./.github/workflows/wiiu.yml
+  build-xbox:
+    uses: ./.github/workflows/xbox.yml
+  build-misc:
+    uses: ./.github/workflows/misc.yml
+  build-ps-legacy:
+    uses: ./.github/workflows/ps_legacy.yml
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - build-vita
+      - build-switch
+      - build-ps4
+      - build-psp
+      - build-3ds
+      - build-ps3
+      - build-wii
+      - build-wiiu
+      - build-xbox
+      - build-misc
+      - build-ps-legacy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Package artifacts
+        run: |
+          cd release-artifacts
+          for dir in */; do
+            platform="${dir%/}"
+            zip -r "../${platform}.zip" "$dir"
+          done
+          cd ..
+          ls -lh *.zip
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          name: ruffle4consoles ${{ github.ref_name || inputs.tag }}
+          draft: false
+          prerelease: true
+          body: |
+            ## ruffle4consoles ${{ github.ref_name || inputs.tag }}
+
+            Automated multi-platform build of the Ruffle Flash emulator for consoles.
+
+            ### Platform status
+
+            | Platform       | Renderer   | Notes                                   |
+            |----------------|------------|-----------------------------------------|
+            | PS Vita        | GLES2      | Full (vitaGL + SDL2)                    |
+            | Nintendo Switch | GLES2     | Full (Mesa + SDL2)                      |
+            | PS4            | GLES2      | Full (OpenOrbis + SDL2)                 |
+            | PS5            | GLES2      | Placeholder – Prospero SDK private      |
+            | Xbox One       | GLES2      | Full (UWP + SDL2)                       |
+            | PS3            | Null       | Core only – RSX renderer needed         |
+            | Wii U          | Null       | Core only – GX2 renderer needed         |
+            | Wii            | Null       | Core only – GX renderer needed          |
+            | GameCube       | Null       | Core only – GX renderer needed          |
+            | Xbox 360       | Null       | Core only – Xenos renderer needed       |
+            | Xbox (OG)      | Null       | Core only – pbgl renderer wip           |
+            | PSP            | Null       | Core only – PSPGL renderer needed       |
+            | Nintendo 3DS   | Null       | Core only – citro3d renderer needed     |
+            | PS2            | Null       | Core only – GS renderer needed          |
+
+            ### Deployment quick-start
+
+            Place `movie.swf` (or configure `config.ron`) in the platform's data path.
+            See [README.md](README.md) for per-platform paths.
+          files: '*.zip'

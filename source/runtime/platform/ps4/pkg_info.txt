@@ -1,0 +1,9 @@
+# PS4 package metadata
+# Used with create-fself / orbis-pub-cmd
+TITLE_ID   = RUFL00001
+TITLE      = Ruffle
+VERSION    = 01.00
+APP_TYPE   = Application
+CATEGORY   = gd
+ATTRIBUTE  = 0x00
+PARENTAL_LEVEL = 0

@@ -1,0 +1,73 @@
+# Normalise line endings to LF everywhere (toolchains expect Unix line endings)
+* text=auto eol=lf
+
+# Rust source
+*.rs     text eol=lf diff=rust
+*.toml   text eol=lf
+*.lock   text eol=lf
+*.md     text eol=lf diff=markdown
+
+# Shell scripts – must stay LF even on Windows
+*.sh     text eol=lf
+
+# JSON (target specs)
+*.json   text eol=lf
+
+# GLSL shaders
+*.vert   text eol=lf
+*.frag   text eol=lf
+*.glsl   text eol=lf
+
+# Linker scripts
+*.ld     text eol=lf
+*.specs  text eol=lf
+
+# XML / manifests
+*.xml    text eol=lf
+
+# GitHub Actions
+*.yml    text eol=lf
+*.yaml   text eol=lf
+
+# Documentation
+LICENSE  text eol=lf
+README*  text eol=lf diff=markdown
+
+# ── Binary files (no diff / no merge driver) ─────────────────────────────────
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.otf    binary
+*.ttf    binary
+*.woff   binary
+*.woff2  binary
+*.swf    binary
+*.vpk    binary
+*.xbe    binary
+*.prx    binary
+*.elf    binary
+*.elf32  binary
+*.dol    binary
+*.rpx    binary
+*.3dsx   binary
+*.cia    binary
+*.nro    binary
+*.nacp   binary
+*.zip    binary
+*.tar.gz binary
+*.a      binary
+*.o      binary
+*.lib    binary
+*.dll    binary
+*.so     binary
+*.dylib  binary
+*.sol    binary
+
+# ── Linguist overrides (GitHub language detection) ───────────────────────────
+*.md     linguist-documentation
+*.sh     linguist-language=Shell
+*.json   linguist-language=JSON
+*.ld     linguist-language=Linker Script
+*.specs  linguist-language=GCC Specs

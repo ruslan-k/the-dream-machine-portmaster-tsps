@@ -1,0 +1,60 @@
+name: Build – PS4
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'ruffle_render_glow/**'
+      - 'frontend-utils/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'targets/x86_64-scei-ps4.json'
+      - 'platform/ps4/**'
+      - '.github/workflows/ps4.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-ps4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install OpenOrbis toolchain
+        run: |
+          wget -q https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/latest/download/toolchain-linux.tar.gz \
+            -O /tmp/openorbis.tar.gz
+          tar -xzf /tmp/openorbis.tar.gz -C /opt
+          echo "/opt/OpenOrbis/bin" >> $GITHUB_PATH
+        env:
+          OPENORBIS: /opt/OpenOrbis
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ps4-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ps4-cargo-
+
+      - name: Build ELF
+        env:
+          OPENORBIS: /opt/OpenOrbis
+        run: bash scripts/build_ps4.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-ps4
+          path: target/x86_64-scei-ps4/ps4/ruffle4consoles.elf
+          if-no-files-found: warn

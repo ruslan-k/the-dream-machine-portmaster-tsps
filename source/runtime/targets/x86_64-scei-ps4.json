@@ -1,0 +1,40 @@
+{
+  "llvm-target": "x86_64-scei-ps4",
+  "target-pointer-width": "64",
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+  "arch": "x86_64",
+  "cpu": "btver2",
+  "env": "",
+  "os": "ps4",
+  "vendor": "scei",
+  "executables": true,
+  "exe-suffix": ".elf",
+  "dll-suffix": ".prx",
+  "dynamic-linking": true,
+  "has-rpath": false,
+  "has-thread-local": true,
+  "linker": "x86_64-pc-linux-gnu-ld",
+  "linker-flavor": "ld.lld",
+  "pre-link-args": {
+    "ld.lld": [
+      "--eh-frame-hdr",
+      "-z", "max-page-size=0x4000",
+      "--script", "targets/ps4.ld",
+      "-L", "/opt/openorbis/target/lib"
+    ]
+  },
+  "post-link-args": {
+    "ld.lld": [
+      "-lSDL2", "-lc", "-lm", "-lkernel", "-lSceVideoOut_stub_weak"
+    ]
+  },
+  "target-endian": "little",
+  "target-c-int-width": "32",
+  "target-family": ["unix"],
+  "max-atomic-width": 64,
+  "panic-strategy": "abort",
+  "position-independent-executables": true,
+  "relocation-model": "pic",
+  "requires-uwtable": true,
+  "trap-unreachable": true
+}

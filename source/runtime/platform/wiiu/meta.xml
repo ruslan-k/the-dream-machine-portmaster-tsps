@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+    <name>Ruffle</name>
+    <coder>ruffle4consoles contributors</coder>
+    <version>0.1.0</version>
+    <release_date>20240101000000</release_date>
+    <short_description>Flash Player (Ruffle) for Wii U</short_description>
+    <long_description>ruffle4consoles is a port of the Ruffle Flash emulator for Wii U.
+Place your SWF files in sd:/wiiu/apps/ruffle/ and name the file movie.swf,
+or configure the filename in config.ron.</long_description>
+    <arguments>
+    </arguments>
+    <disability_notes></disability_notes>
+</app>

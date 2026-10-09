@@ -1,0 +1,25 @@
+# ── Per-target rustflags ─────────────────────────────────────────────────────
+
+[target.aarch64-nintendo-switch]
+rustflags = ['--cfg', 'getrandom_backend="rndr"']
+
+[target.mipsel-sony-psp]
+rustflags = [
+    "-C", "link-arg=-specs=/usr/local/pspdev/lib/pspdev.specs",
+    "-C", "link-arg=-lpsprtp",
+    "-C", "link-arg=-lpspaudio",
+    "-C", "link-arg=-lpspctrl",
+    "-C", "link-arg=-lpspge",
+    "-C", "link-arg=-lm",
+    "-C", "link-arg=-lc",
+]
+
+[target.armv6k-nintendo-3ds]
+rustflags = [
+    "-C", "link-arg=-specs=/opt/devkitpro/devkitARM/arm-none-eabi/lib/3dsx.specs",
+]
+
+# ── Global build config ───────────────────────────────────────────────────────
+
+[build]
+rustflags = ["-Zthreads=16"]

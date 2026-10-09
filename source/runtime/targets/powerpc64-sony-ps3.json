@@ -1,0 +1,32 @@
+{
+  "llvm-target": "powerpc64-unknown-linux-gnu",
+  "target-pointer-width": "64",
+  "data-layout": "E-m:e-i64:64-n32:64",
+  "arch": "powerpc64",
+  "cpu": "cell",
+  "env": "gnu",
+  "os": "ps3",
+  "vendor": "sony",
+  "executables": true,
+  "exe-suffix": ".elf",
+  "dynamic-linking": false,
+  "has-rpath": false,
+  "has-thread-local": false,
+  "linker": "/usr/local/ps3dev/ppu/bin/ppu-gcc",
+  "linker-flavor": "gcc",
+  "pre-link-args": {
+    "gcc": [
+      "-L", "/usr/local/ps3dev/ppu/lib",
+      "-L", "/usr/local/ps3dev/portlibs/ppu/lib"
+    ]
+  },
+  "target-endian": "big",
+  "target-c-int-width": "32",
+  "target-family": ["unix"],
+  "max-atomic-width": 64,
+  "panic-strategy": "abort",
+  "position-independent-executables": false,
+  "relocation-model": "static",
+  "requires-uwtable": false,
+  "trap-unreachable": true
+}

@@ -1,0 +1,150 @@
+[package]
+name = "ruffle4consoles"
+version = "0.1.0"
+edition = "2021"
+authors = ["ruffle4consoles contributors"]
+description = "Ruffle Flash Player port for consoles"
+license = "MIT OR Apache-2.0"
+
+# ── Common dependencies ──────────────────────────────────────────────────────
+
+[dependencies]
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", branch = "master", features = [
+    "audio",
+    "symphonia",
+    "mp3",
+    "aac",
+    "nellymoser",
+    "lzma",
+    "default_compatibility_rules",
+    "default_font",
+] }
+ruffle_render = { git = "https://github.com/ruffle-rs/ruffle", branch = "master" }
+anyhow     = "1.0"
+ron        = "0.11.0"
+serde      = { version = "1.0", features = ["derive"] }
+tracing    = { version = "0.1", features = ["log"] }
+log = "0.4"
+url        = "2.5"
+
+# ── SDL2 + GLES2 renderer (Vita, Switch, PS4, PS5, Xbox One, desktop) ───────
+
+[target.'cfg(any(target_os="vita", target_os="horizon", target_os="ps4", target_os="ps5", target_os="xboxone", target_os="linux", target_os="macos", target_os="windows"))'.dependencies]
+sdl2                = { version = "0.38.0", features = ["use-pkgconfig"] }
+ruffle_render_glow  = { path = "ruffle_render_glow" }
+glow                = { git = "https://github.com/grovesNL/glow", branch = "main", features = [] }
+ruffle_frontend_utils = { path = "frontend-utils" }
+
+# ── PS Vita ──────────────────────────────────────────────────────────────────
+
+[target.'cfg(target_os="vita")'.dependencies]
+vitasdk-sys = { version = "0.3.2", features = [
+    "SceLibKernel_stub",
+    "SceKernelThreadMgr_stub",
+] }
+
+# ── Nintendo Switch – extra helpers via libnx ────────────────────────────────
+# (libnx is linked via the custom target / build.rs – no extra crate needed)
+
+# ── PlayStation Portable ─────────────────────────────────────────────────────
+
+[target.'cfg(target_os="psp")'.dependencies]
+psp = { version = "0.3" }
+
+# ── Nintendo 3DS ─────────────────────────────────────────────────────────────
+
+# Unpublished ctru-sys is not needed for this Linux-only port build.
+
+# ── PlayStation 3 (PSL1GHT / Milk SDK) ──────────────────────────────────────
+
+[target.'cfg(target_os="ps3")'.dependencies]
+# PSL1GHT bindings – community crate; will be absent until published
+# ps3-sys = { git = "https://github.com/ps3-rust/ps3-sys" }
+
+# ── Wii / GameCube / Wii U (devkitPPC) ───────────────────────────────────────
+# No crate-level deps; all linking handled via build.rs and the target JSON.
+
+# ── Xbox (OG) ────────────────────────────────────────────────────────────────
+# nxdk is a C-only environment; linking handled in build.rs.
+
+# ── PlayStation 2 ────────────────────────────────────────────────────────────
+# ps2sdk is a C-only environment; linking handled in build.rs.
+
+# ── Cargo profiles ───────────────────────────────────────────────────────────
+
+[profile.release]
+debug = true
+
+[profile.vita]
+inherits      = "release"
+opt-level     = 3
+strip         = "none"
+lto           = false
+codegen-units = 1
+incremental   = false
+panic         = "abort"
+
+[profile.switch]
+inherits      = "release"
+opt-level     = 3
+strip         = "none"
+lto           = true
+codegen-units = 1
+incremental   = false
+panic         = "abort"
+
+[profile.psp]
+inherits      = "release"
+opt-level     = "s"
+strip         = "none"
+lto           = true
+codegen-units = 1
+incremental   = false
+panic         = "abort"
+
+[profile.ds3]  # 3DS
+inherits      = "release"
+opt-level     = "s"
+strip         = "none"
+lto           = true
+codegen-units = 1
+incremental   = false
+panic         = "abort"
+
+[profile.ps4]
+inherits      = "release"
+opt-level     = 3
+lto           = true
+codegen-units = 1
+panic         = "abort"
+
+[profile.wii]
+inherits      = "release"
+opt-level     = "s"
+lto           = true
+codegen-units = 1
+panic         = "abort"
+
+[profile.wiiu]
+inherits      = "release"
+opt-level     = 3
+lto           = true
+codegen-units = 1
+panic         = "abort"
+
+[profile.ps3]
+inherits      = "release"
+opt-level     = 2
+lto           = false
+codegen-units = 1
+panic         = "abort"
+
+# ── Vita package metadata (for cargo-vita) ───────────────────────────────────
+
+[package.metadata.vita]
+title_id   = "RUFFLVITA"
+title_name = "Ruffle"
+build_std  = "std,panic_abort"
+
+[package.metadata.vita.profile.vita]
+strip_symbols = true

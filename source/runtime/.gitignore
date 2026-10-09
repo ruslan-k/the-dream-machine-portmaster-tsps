@@ -1,0 +1,58 @@
+# Cargo build output
+/target/
+**/target/
+
+# Cargo lock file (keep for binaries, comment out for libraries)
+# Cargo.lock
+
+# Editor / IDE
+.idea/
+.vscode/
+*.iml
+.vs/
+*.suo
+*.user
+*.sln.docview
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test SWF files (potentially large; add your own)
+**/*.swf
+!src/test.swf
+
+# Toolchain-generated map files
+*.map
+
+# devkitPro / nxdk intermediates
+*.d
+*.o
+*.a
+*.dep
+
+# PS3 / PS4 self/pkg intermediates
+*.self
+*.pkg
+*.fself
+
+# Vita VPK staging
+*.vpk
+!target/**/*.vpk
+
+# Android / NDK leftovers
+*.apk
+local.properties
+
+# nxdk
+*.xbe
+!target/**/*.xbe
+
+# Logs
+*.log
+
+# Secret/credentials (never commit)
+*.env
+.env.local
+secrets/

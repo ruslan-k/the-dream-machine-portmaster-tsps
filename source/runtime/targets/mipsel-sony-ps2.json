@@ -1,0 +1,42 @@
+{
+  "llvm-target": "mipsel-unknown-none",
+  "target-pointer-width": "32",
+  "data-layout": "e-m:m-p:32:32-i8:8:32-i16:16:32-i64:64-n32-S64",
+  "arch": "mips",
+  "cpu": "mips2",
+  "env": "",
+  "os": "ps2",
+  "vendor": "sony",
+  "executables": true,
+  "exe-suffix": ".elf",
+  "dynamic-linking": false,
+  "has-rpath": false,
+  "has-thread-local": false,
+  "linker": "ee-gcc",
+  "linker-flavor": "gcc",
+  "features": "+mips32",
+  "pre-link-args": {
+    "gcc": [
+      "-mips2",
+      "-mabi=32",
+      "-G0",
+      "-Ttext", "0x00100000",
+      "-L", "/usr/local/ps2dev/ps2sdk/ee/lib",
+      "-T", "/usr/local/ps2dev/ps2sdk/ee/startup/linkfile"
+    ]
+  },
+  "post-link-args": {
+    "gcc": [
+      "-lps2sdkc", "-lm", "-lc", "-lgcc"
+    ]
+  },
+  "target-endian": "little",
+  "target-c-int-width": "32",
+  "target-family": [],
+  "max-atomic-width": 32,
+  "panic-strategy": "abort",
+  "position-independent-executables": false,
+  "relocation-model": "static",
+  "requires-uwtable": false,
+  "trap-unreachable": true
+}

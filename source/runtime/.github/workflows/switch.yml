@@ -1,0 +1,62 @@
+name: Build – Nintendo Switch
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'ruffle_render_glow/**'
+      - 'frontend-utils/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'targets/aarch64-nintendo-switch.json'
+      - 'targets/aarch64_nintendo_switch.*'
+      - '.github/workflows/switch.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-switch:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install devkitPro Switch libs
+        run: |
+          dkp-pacman -Sy --noconfirm \
+            switch-dev \
+            switch-sdl2 \
+            switch-mesa \
+            switch-glad \
+            switch-pkg-config
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: switch-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: switch-cargo-
+
+      - name: Build NRO
+        env:
+          DEVKITPRO: /opt/devkitpro
+        run: bash scripts/build_switch.sh
+
+      - name: Upload NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-switch
+          path: target/aarch64-nintendo-switch/switch/ruffle4consoles.nro
+          if-no-files-found: warn

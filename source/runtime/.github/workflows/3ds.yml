@@ -1,0 +1,56 @@
+name: Build – Nintendo 3DS
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'targets/armv6k-nintendo-3ds.json'
+      - '.github/workflows/3ds.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-3ds:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install 3DS libs
+        run: dkp-pacman -Sy --noconfirm 3ds-dev 3ds-sdl2
+
+      - name: Install cargo-3ds
+        run: cargo install cargo-3ds
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: 3ds-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: 3ds-cargo-
+
+      - name: Build 3DSX
+        env:
+          DEVKITPRO: /opt/devkitpro
+        run: bash scripts/build_3ds.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-3ds
+          path: target/armv6k-nintendo-3ds/release/ruffle4consoles.3dsx
+          if-no-files-found: warn

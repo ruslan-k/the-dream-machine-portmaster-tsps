@@ -1,0 +1,93 @@
+name: Build – Wii / GameCube
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'targets/powerpc-nintendo-wii.json'
+      - 'targets/powerpc-nintendo-gamecube.json'
+      - '.github/workflows/wii.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-wii:
+    name: Build Wii DOL
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitppc:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install Wii libs
+        run: dkp-pacman -Sy --noconfirm wii-dev wii-sdl2
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wii-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: wii-cargo-
+
+      - name: Build DOL
+        env:
+          DEVKITPRO: /opt/devkitpro
+        run: bash scripts/build_wii.sh
+
+      - name: Upload DOL
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-wii
+          path: target/powerpc-nintendo-wii/wii/ruffle4consoles.dol
+          if-no-files-found: warn
+
+  build-gamecube:
+    name: Build GameCube DOL
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitppc:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install GameCube libs
+        run: dkp-pacman -Sy --noconfirm gamecube-dev
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: gamecube-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: gamecube-cargo-
+
+      - name: Build DOL
+        env:
+          DEVKITPRO: /opt/devkitpro
+        run: bash scripts/build_gamecube.sh
+
+      - name: Upload DOL
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-gamecube
+          path: target/powerpc-nintendo-gamecube/wii/ruffle4consoles.dol
+          if-no-files-found: warn

@@ -1,0 +1,40 @@
+{
+  "llvm-target": "powerpc64-unknown-none",
+  "target-pointer-width": "64",
+  "data-layout": "E-m:e-i64:64-n32:64",
+  "arch": "powerpc64",
+  "cpu": "ppc-cell-be",
+  "env": "",
+  "os": "xbox360",
+  "vendor": "microsoft",
+  "executables": true,
+  "exe-suffix": ".elf32",
+  "dynamic-linking": false,
+  "has-rpath": false,
+  "has-thread-local": false,
+  "linker": "xenon-gcc",
+  "linker-flavor": "gcc",
+  "features": "+altivec",
+  "pre-link-args": {
+    "gcc": [
+      "-mcpu=cell",
+      "-m32",
+      "-L", "/usr/local/xenon/lib",
+      "-L", "/usr/local/xenon/xenon/lib"
+    ]
+  },
+  "post-link-args": {
+    "gcc": [
+      "-lxenon", "-lm", "-lc", "-lgcc"
+    ]
+  },
+  "target-endian": "big",
+  "target-c-int-width": "32",
+  "target-family": [],
+  "max-atomic-width": 64,
+  "panic-strategy": "abort",
+  "position-independent-executables": false,
+  "relocation-model": "static",
+  "requires-uwtable": false,
+  "trap-unreachable": true
+}

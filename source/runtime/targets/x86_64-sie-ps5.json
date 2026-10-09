@@ -1,0 +1,39 @@
+{
+  "llvm-target": "x86_64-sie-ps5",
+  "target-pointer-width": "64",
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+  "arch": "x86_64",
+  "cpu": "znver2",
+  "env": "",
+  "os": "ps5",
+  "vendor": "sie",
+  "executables": true,
+  "exe-suffix": ".elf",
+  "dll-suffix": ".prx",
+  "dynamic-linking": true,
+  "has-rpath": false,
+  "has-thread-local": true,
+  "linker": "ld.lld",
+  "linker-flavor": "ld.lld",
+  "pre-link-args": {
+    "ld.lld": [
+      "--eh-frame-hdr",
+      "-z", "max-page-size=0x4000",
+      "-L", "/opt/prospero-sdk/target/lib"
+    ]
+  },
+  "post-link-args": {
+    "ld.lld": [
+      "-lSDL2", "-lc", "-lm", "-lkernel_stub"
+    ]
+  },
+  "target-endian": "little",
+  "target-c-int-width": "32",
+  "target-family": ["unix"],
+  "max-atomic-width": 64,
+  "panic-strategy": "abort",
+  "position-independent-executables": true,
+  "relocation-model": "pic",
+  "requires-uwtable": true,
+  "trap-unreachable": true
+}

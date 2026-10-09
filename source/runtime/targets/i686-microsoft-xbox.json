@@ -1,0 +1,38 @@
+{
+  "llvm-target": "i686-pc-none-msvc",
+  "target-pointer-width": "32",
+  "data-layout": "e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32-S32",
+  "arch": "x86",
+  "cpu": "pentium3",
+  "env": "",
+  "os": "xbox",
+  "vendor": "microsoft",
+  "executables": true,
+  "exe-suffix": ".exe",
+  "dynamic-linking": false,
+  "has-rpath": false,
+  "has-thread-local": false,
+  "linker": "link.exe",
+  "linker-flavor": "msvc",
+  "pre-link-args": {
+    "msvc": [
+      "/NODEFAULTLIB",
+      "/SUBSYSTEM:XBOX"
+    ]
+  },
+  "post-link-args": {
+    "msvc": [
+      "SDL.lib", "pbgl.lib", "pbkit.lib", "xboxkrnl.lib",
+      "libm.lib", "libc.lib"
+    ]
+  },
+  "target-endian": "little",
+  "target-c-int-width": "32",
+  "target-family": ["windows"],
+  "max-atomic-width": 64,
+  "panic-strategy": "abort",
+  "position-independent-executables": false,
+  "relocation-model": "static",
+  "requires-uwtable": false,
+  "trap-unreachable": true
+}

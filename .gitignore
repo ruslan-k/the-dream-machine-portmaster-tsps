@@ -1,0 +1,16 @@
+**/target/
+**/__pycache__/
+*.pyc
+port/dreammachine/gamedata/*
+!port/dreammachine/gamedata/config.ron
+port/dreammachine/storage/
+port/dreammachine/logs/
+port/dreammachine/log.txt
+*.swf
+*.mp3
+*.exe
+*.sol
+*.zip
+*.log
+/test-tmp/
+port/dreammachine/bitmap-cache/

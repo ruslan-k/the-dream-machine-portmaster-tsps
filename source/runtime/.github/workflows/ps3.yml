@@ -1,0 +1,60 @@
+name: Build – PS3
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'targets/powerpc64-sony-ps3.json'
+      - 'platform/ps3/**'
+      - '.github/workflows/ps3.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-ps3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install ps3toolchain (PSL1GHT)
+        run: |
+          sudo apt-get install -y \
+            cmake bzip2 bison flex wget texinfo \
+            libgmp-dev libmpfr-dev libmpc-dev python3
+          git clone --depth=1 https://github.com/ps3dev/ps3toolchain /tmp/ps3tc
+          cd /tmp/ps3tc && sudo ./toolchain.sh
+          echo "/usr/local/ps3dev/ppu/bin" >> $GITHUB_PATH
+          echo "/usr/local/ps3dev/spu/bin" >> $GITHUB_PATH
+          echo "/usr/local/ps3dev/tools/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ps3-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ps3-cargo-
+
+      - name: Build ELF
+        env:
+          PSL1GHT: /usr/local/ps3dev
+        run: bash scripts/build_ps3.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-ps3
+          path: target/powerpc64-sony-ps3/ps3/ruffle4consoles.elf
+          if-no-files-found: warn

@@ -1,0 +1,87 @@
+name: Build – PS2 / PS5
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'targets/mipsel-sony-ps2.json'
+      - 'targets/x86_64-sie-ps5.json'
+      - '.github/workflows/ps_legacy.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-ps2:
+    name: Build PS2 ELF
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install ps2dev toolchain
+        run: |
+          sudo apt-get install -y \
+            cmake bison flex texinfo libgmp-dev libmpfr-dev libmpc-dev \
+            python3 wget
+          git clone --depth=1 https://github.com/ps2dev/ps2toolchain /tmp/ps2tc
+          cd /tmp/ps2tc && sudo ./toolchain.sh
+          echo "/usr/local/ps2dev/ee/bin" >> $GITHUB_PATH
+          echo "/usr/local/ps2dev/tools/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ps2-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ps2-cargo-
+
+      - name: Build ELF
+        env:
+          PS2DEV: /usr/local/ps2dev
+          PS2SDK: /usr/local/ps2dev/ps2sdk
+        run: bash scripts/build_ps2.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-ps2
+          path: target/mipsel-sony-ps2/psp/ruffle4consoles.elf
+          if-no-files-found: warn
+
+  build-ps5:
+    name: Build PS5 ELF
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      # PS5 SDK is not publicly available; this job serves as a compile-check
+      # placeholder. Replace with the actual Prospero SDK once available.
+      - name: Stub PS5 toolchain check
+        run: |
+          echo "PS5 (Prospero) SDK is not publicly available."
+          echo "This job will succeed as a placeholder CI check."
+          echo "Replace with actual Prospero SDK steps when available."
+
+      - name: Upload placeholder
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-ps5-placeholder
+          path: README.md
+          if-no-files-found: warn

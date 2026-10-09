@@ -1,0 +1,104 @@
+name: Build – Xbox (OG) / Xbox 360
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - 'targets/i686-microsoft-xbox.json'
+      - 'targets/powerpc64-microsoft-xbox360.json'
+      - '.github/workflows/xbox.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-xbox-og:
+    name: Build Xbox OG (nxdk)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install nxdk dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake libsdl2-dev clang lld llvm python3 git wget
+
+      - name: Clone and build nxdk
+        run: |
+          git clone --recurse-submodules --depth=1 \
+            https://github.com/XboxDev/nxdk /opt/nxdk
+          cd /opt/nxdk && make
+          echo "/opt/nxdk/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: xbox-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: xbox-cargo-
+
+      - name: Build XBE
+        env:
+          NXDK_DIR: /opt/nxdk
+        run: bash scripts/build_xbox.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-xbox
+          path: target/i686-microsoft-xbox/release/default.xbe
+          if-no-files-found: warn
+
+  build-xbox360:
+    name: Build Xbox 360 (libxenon)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Install libxenon
+        run: |
+          sudo apt-get install -y \
+            cmake bison flex texinfo libgmp-dev libmpfr-dev libmpc-dev
+          git clone --depth=1 \
+            https://github.com/Free60Project/libxenon /tmp/libxenon
+          cd /tmp/libxenon && sudo make toolchain
+          echo "/usr/local/xenon/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: xbox360-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: xbox360-cargo-
+
+      - name: Build ELF
+        env:
+          LIBXENON_DIR: /usr/local/xenon
+        run: bash scripts/build_xbox360.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-xbox360
+          path: target/powerpc64-microsoft-xbox360/release/ruffle4consoles.elf32
+          if-no-files-found: warn

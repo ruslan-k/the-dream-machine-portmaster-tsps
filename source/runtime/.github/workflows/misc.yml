@@ -1,0 +1,89 @@
+name: Build – Xbox One / Desktop check
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'ruffle_render_glow/**'
+      - 'frontend-utils/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - '.github/workflows/misc.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  # Desktop is the fastest way to catch compile errors in shared SDL2 code.
+  check-desktop:
+    name: Cargo check (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, rustfmt
+
+      - name: Install SDL2 + OpenGL headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libsdl2-dev libgl-dev
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: desktop-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: desktop-cargo-
+
+      - name: Check
+        run: cargo check --all-features 2>&1
+
+      - name: Clippy
+        run: cargo clippy --all-features -- -D warnings 2>&1 || true
+
+      - name: Rustfmt
+        run: cargo fmt --all --check 2>&1 || true
+
+  build-xboxone:
+    name: Build Xbox One (UWP / x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install SDL2 (vcpkg)
+        run: |
+          vcpkg install sdl2:x64-windows-static
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: xboxone-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: xboxone-cargo-
+
+      - name: Build
+        run: bash scripts/build_xboxone.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-xboxone
+          path: target/x86_64-pc-windows-msvc/ps4/ruffle4consoles.exe
+          if-no-files-found: warn

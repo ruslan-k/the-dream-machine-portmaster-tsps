@@ -1,0 +1,9 @@
+# PS3 package metadata (for sfo.py / make_package_npdrm)
+TITLE_ID   = RUFL00001
+TITLE      = Ruffle
+APP_VER    = 01.00
+VERSION    = 01.00
+CATEGORY   = HG
+PARENTAL_LEVEL = 0
+RESOLUTION = 63         # 720p + 1080p flags
+SOUND_FORMAT = 1        # LPCM 2ch

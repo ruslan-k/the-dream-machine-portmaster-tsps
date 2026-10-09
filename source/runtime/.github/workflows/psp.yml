@@ -1,0 +1,57 @@
+name: Build – PSP
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'build.rs'
+      - '.github/workflows/psp.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-psp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: mipsel-sony-psp
+
+      - name: Install pspdev toolchain
+        run: |
+          sudo apt-get install -y cmake libgmp-dev libmpfr-dev libmpc-dev \
+            texinfo bison flex bc libncurses-dev
+          git clone --depth=1 https://github.com/pspdev/pspdev /tmp/pspdev
+          cd /tmp/pspdev && sudo ./build.sh
+          echo "/usr/local/pspdev/bin" >> $GITHUB_PATH
+
+      - name: Install cargo-psp
+        run: cargo install cargo-psp
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: psp-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: psp-cargo-
+
+      - name: Build PRX
+        run: bash scripts/build_psp.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruffle4consoles-psp
+          path: target/mipsel-sony-psp/release/ruffle4consoles.prx
+          if-no-files-found: warn

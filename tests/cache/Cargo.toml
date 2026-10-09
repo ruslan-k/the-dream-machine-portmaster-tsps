@@ -1,0 +1,9 @@
+[package]
+name="tormentum-cache-tests"
+version="0.1.0"
+edition="2021"
+[dependencies]
+sha2="0.10"
+miniz_oxide="0.8"
+[lib]
+path="../../source/runtime/ruffle_render_glow/src/bitmap_disk_cache.rs"
