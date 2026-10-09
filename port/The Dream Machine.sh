@@ -33,8 +33,14 @@ ln -s "$GAMEDIR/gamedata" /tmp/gdata_ || exit 1
 cleanup() {
   [ "$(readlink /tmp/gdata_ 2>/dev/null)" = "$GAMEDIR/gamedata" ] && rm /tmp/gdata_
   [ -n "${helper_pid:-}" ] && kill "$helper_pid" 2>/dev/null || true
+  declare -F dream_gpu_restore >/dev/null && dream_gpu_restore
 }
 trap cleanup EXIT
+source "$GAMEDIR/gpu-governor.sh"
+# GPU pin improves redraw cadence, but the first teardown hung the device.
+# Keep this candidate opt-in until clean exit is proven on the real handheld.
+export DREAM_GPU_PERFORMANCE="${DREAM_GPU_PERFORMANCE:-0}"
+dream_gpu_enable
 # The native frontend supplies its own controller-driven cursor and A click.
 # gptokeyb2 only supplies the exit helper, avoiding duplicate synthetic clicks.
 if [ -z "${sdl_controllerconfig:-}" ]; then

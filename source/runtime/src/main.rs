@@ -5,6 +5,7 @@
 mod backends;
 mod custom_event;
 mod diagnostic_log;
+mod warp_echo;
 #[cfg(target_os="linux")]
 mod dream_cursor;
 
@@ -743,6 +744,10 @@ fn sdl2_main() {
     let mut diag_time = Instant::now();
     let mut phase_ms = [0.0_f64; 4];
     let mut tick_calls: u64 = 0;
+    let filter_warp_echo = std::env::var("DREAM_WARP_ECHO_FILTER").map(|v| v == "1").unwrap_or(true);
+    let mut warp_echo = warp_echo::WarpEchoFilter::default();
+    let mut mouse_event_counts = [0_u64; 3];
+    eprintln!("warp_echo_filter={filter_warp_echo}");
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     // ── Main loop ─────────────────────────────────────────────────────────────
@@ -821,6 +826,12 @@ fn sdl2_main() {
                     target_os = "ps4",   target_os = "ps5",   target_os = "xboxone",
                 ))]
                 sdl2::event::Event::MouseMotion { x, y, .. } => {
+                    mouse_event_counts[0] += 1;
+                    let forward = warp_echo.should_forward(x,y);
+                    if filter_warp_echo && !forward {
+                        mouse_event_counts[1] += 1;
+                        continue;
+                    }
                     cursor_x = x as f64;
                     cursor_y = y as f64;
                     player_ref.lock().unwrap()
@@ -921,7 +932,9 @@ fn sdl2_main() {
                         let seconds = (dt as f64 / 1_000_000.0).min(0.05);
                         cursor_x = (cursor_x + dx * speed * seconds).clamp(0.0, dimensions.width.saturating_sub(1) as f64);
                         cursor_y = (cursor_y + dy * speed * seconds).clamp(0.0, dimensions.height.saturating_sub(1) as f64);
+                        warp_echo.mark(cursor_x.round() as i32,cursor_y.round() as i32);
                         mouse.warp_mouse_in_window(&sdl_window, cursor_x.round() as i32, cursor_y.round() as i32);
+                        mouse_event_counts[2] += 1;
                         p.handle_event(PlayerEvent::MouseMove {x:cursor_x, y:cursor_y});
                     }
                 }
@@ -942,6 +955,8 @@ fn sdl2_main() {
                     if diag_time.elapsed().as_secs_f64() >= 5.0 {
                         eprintln!("render_fps={:.2}", diag_frames as f64 / diag_time.elapsed().as_secs_f64());
                         eprintln!("phase_ms_per_render lock={:.2} tick={:.2} draw={:.2} swap={:.2} tick_calls={} swf_fps={:.1}",phase_ms[0]/diag_frames as f64,phase_ms[1]/diag_frames as f64,phase_ms[2]/diag_frames as f64,phase_ms[3]/diag_frames as f64,tick_calls,p.frame_rate());
+                        eprintln!("mouse_events native={} warp_echo_skipped={} controller_moves={}",mouse_event_counts[0],mouse_event_counts[1],mouse_event_counts[2]);
+                        mouse_event_counts = [0;3];
                         phase_ms = [0.0;4]; tick_calls = 0;
                         diag_frames = 0; diag_time = Instant::now();
                     }

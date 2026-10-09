@@ -23,6 +23,8 @@ if ! cmp -s /work/source/core/src/backend/audio.rs "$core"; then
 fi
 mkdir -p /work/test-tmp
 TMPDIR=/work/test-tmp cargo test --manifest-path /work/tests/cache/Cargo.toml --target x86_64-unknown-linux-gnu
+TMPDIR=/work/test-tmp cargo test --manifest-path /work/tests/diagnostics/Cargo.toml --target x86_64-unknown-linux-gnu
+TMPDIR=/work/test-tmp cargo test --manifest-path /work/tests/warp-echo/Cargo.toml --target x86_64-unknown-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu
 cp target/aarch64-unknown-linux-gnu/release/ruffle4consoles /work/port/dreammachine/ruffle-native-multifile.aarch64.lazy
 aarch64-linux-gnu-strip /work/port/dreammachine/ruffle-native-multifile.aarch64.lazy

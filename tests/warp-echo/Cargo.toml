@@ -1,0 +1,6 @@
+[package]
+name="dream-warp-echo-tests"
+version="0.1.0"
+edition="2021"
+[lib]
+path="../../source/runtime/src/warp_echo.rs"
