@@ -46,9 +46,7 @@ exact supported main SWF hash. Preparation changes **one byte**, enabling
 unavailable Zinc file APIs. It does not modify chapter checks, story, textures,
 geometry, music or licensing logic. Never publish recovered game files.
 
-CPU profiling and the reversible mouse-warp echo experiment are documented in
-[profiling notes](docs/PROFILING.md). The candidate removes confirmed duplicate
-mouse events; a matched gameplay FPS benefit is not yet established.
+CPU profiling, the reversible mouse-warp echo experiment, and a small matched-scene ThinLTO result are documented in [profiling notes](docs/PROFILING.md).
 GPU governor pinning is experimental and **disabled by default**: the live test
 improved redraw cadence, but a subsequent device hang prevents a stability claim.
 

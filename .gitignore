@@ -12,5 +12,8 @@ port/dreammachine/log.txt
 *.sol
 *.zip
 *.log
+/source/runtime/src/test.swf
+/tests/property-hash/target/
+/tests/property-hash/.cargo-lock
 /test-tmp/
 port/dreammachine/bitmap-cache/

@@ -26,6 +26,14 @@ Implemented a portable governor save/restore helper, with four tests passing (en
 
 The GPU candidate is **disabled by default** (`DREAM_GPU_PERFORMANCE=0`). Its opt-in mode must not be recommended as a stable fix yet. After owner reboot: recovered SSH with the established helper/alias, deployed disabled launcher, read-back SHA-256 `6478aa5c8e23d34b91bb9f259867ae750d3891df5df544c7039fb58ce9130533` matched host. Real DRM screenshots verified the Spruce Ports menu, the game title with cursor, and a subsequent clean return to the Ports menu; fresh read-back governor was `simple_ondemand`, game exit code 0, network still responding. Native runtime remains `00eab5dbb438192070058789bc11c4f6f104adcd91794c4623bb6fecf4e183b8`; cache/quiet logging/warp-echo filter remain enabled. Helper SHA-256 `7effe69f578f1a3b33080673ca357508c5099eb1de67aaf851d32ca26b73f7d5` matched host/device. Final state: game stopped, MainUI visible.
 
+## Release ThinLTO A/B (same scene and no synthetic input)
+
+To test the CPU-heavy AVM/property-map path without altering Flash semantics, only the target runtime release profile changed: `lto = "thin"`. No loader or game logic changed; the separately microbenchmarked ASCII-hash candidate was discarded (slower on ARM64). Build also ran cache, logging and warp-filter tests; ThinLTO AArch64 release built successfully.
+
+Deployed only the new runtime; SHA-256 `63d9741b01926cd924cc9a011dfd8d1bef7a2b7703c660632c3476af2e59f9b1` matched target. Real DRM capture showed the title screen and cursor. The active test contained no synthetic input; real menu-driving event node was absent, so this isn't a matched walking benchmark.
+
+Before change, two 26-second user scene samples at default 150 MHz GPU averaged 25.304 and 25.623 FPS, CPU 30.29% and 30.05% of one core. After change, two equivalent no-input samples averaged 25.886 and 25.978 FPS, CPU 28.98% and 28.86%, zero swap-ins/outs and zero major faults. FPS uplift ~2.0–2.5%; CPU reduction ~1.1 percentage points. This is a **small measured gain**, not elimination of hitches. Same 24 FPS SWF timeline; redraw FPS varies because a 24 FPS movie cannot consume extra frames continuously.
+
 ## Remaining evidence needed
 
-Record matched repeated walking/item interactions with filter on/off, preserve event counts and CPU-sample windows, and identify whether stalls coincide with AVM/hit testing, first-use decode/upload, major faults, or asset import. Do not claim that lower memory or eliminated duplicate events has fixed all stutter. Never reduce textures/audio or alter Flash event/timer semantics merely to increase a counter.
+Record matched repeated walking/item interactions, preferably a device-side physical pad/mouse session, and identify whether stalls coincide with AVM/hit testing, first-use decode/upload, major faults, or asset import. Do not claim that lower memory or eliminated duplicate events has fixed all stutter. Never reduce textures/audio or alter Flash event/timer semantics merely to increase a counter.
