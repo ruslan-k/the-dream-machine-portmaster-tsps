@@ -7,6 +7,21 @@ pub fn input_trace_from_setting(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true"))
 }
 
+/// Bound only the known repeated AVM warning; preserve a suppressed count.
+#[derive(Default)]
+pub struct WarningGate { last_ms: Option<u64>, suppressed: u64 }
+impl WarningGate {
+    pub fn observe(&mut self, now_ms: u64) -> Option<u64> {
+        if self.last_ms.map_or(true, |last| now_ms.saturating_sub(last) >= 10_000) {
+            self.last_ms = Some(now_ms);
+            Some(std::mem::take(&mut self.suppressed))
+        } else {
+            self.suppressed = self.suppressed.saturating_add(1);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

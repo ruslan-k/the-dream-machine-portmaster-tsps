@@ -4,5 +4,8 @@ version="0.1.0"
 edition="2021"
 [dependencies]
 log="0.4"
+[[test]]
+name="warning_gate"
+path="warning_tests.rs"
 [lib]
 path="../../source/runtime/src/diagnostic_log.rs"

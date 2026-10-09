@@ -531,7 +531,24 @@ fn sdl2_main() {
     struct Diagnostics;
     impl log::Log for Diagnostics {
         fn enabled(&self, m: &log::Metadata) -> bool { m.level().to_level_filter() <= log::max_level() }
-        fn log(&self, r: &log::Record) { if self.enabled(r.metadata()) { eprintln!("{} {}: {}",r.level(),r.target(),r.args()); } }
+        fn log(&self, r: &log::Record) {
+            if !self.enabled(r.metadata()) { return; }
+            if r.level() == log::Level::Warn && r.target() == "ruffle_core::avm1::activation"
+                && std::env::var("DREAM_WARNING_LIMIT").as_deref() != Ok("0") {
+                let message = r.args().to_string();
+                if message == "Cannot enumerate Undefined" {
+                    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+                    static GATE: std::sync::OnceLock<std::sync::Mutex<diagnostic_log::WarningGate>> = std::sync::OnceLock::new();
+                    let now = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+                    let count = GATE.get_or_init(Default::default).lock().unwrap().observe(now);
+                    if let Some(skipped) = count {
+                        eprintln!("{} {}: {} (repeat_suppressed={skipped})",r.level(),r.target(),message);
+                    }
+                    return;
+                }
+            }
+            eprintln!("{} {}: {}",r.level(),r.target(),r.args());
+        }
         fn flush(&self) {}
     }
     static DIAG: Diagnostics = Diagnostics;
