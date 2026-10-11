@@ -169,10 +169,19 @@ impl RegistryData {
     // during preload. Preserve exact pixels; instantiate on first use/readback.
     fn texture(&self) -> glow::Texture {
         *self.texture.get_or_init(|| unsafe {
+            // First-use decoding/upload happens synchronously on the render
+            // thread. Optional slow-path timings distinguish storage, zlib
+            // inflation and GL submission without changing asset semantics.
+            let trace_texture = std::env::var("DREAM_TEXTURE_TRACE").as_deref() == Ok("1");
+            let started = std::time::Instant::now();
             let (format, compressed) = self.deferred.lock().unwrap().take()
                 .expect("Uninitialized texture must have deferred pixels");
-            let bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed.compressed())
+            let compressed = compressed.compressed();
+            let read_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let inflated = std::time::Instant::now();
+            let bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed)
                 .expect("Locally compressed bitmap must decode");
+            let inflate_ms = inflated.elapsed().as_secs_f64() * 1000.0;
             let texture = self.gl.create_texture().expect("Unable to create texture");
             self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             self.gl.tex_image_2d(glow::TEXTURE_2D, 0, format as i32,
@@ -184,6 +193,13 @@ impl RegistryData {
                 (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
                 (glow::TEXTURE_MAG_FILTER, glow::LINEAR)] {
                 self.gl.tex_parameter_i32(glow::TEXTURE_2D, param, value as i32);
+            }
+            if trace_texture && started.elapsed().as_millis() >= 10 {
+                eprintln!(
+                    "dream_texture_first_use width={} height={} compressed={} decoded={} read_ms={:.2} inflate_ms={:.2} total_ms={:.2}",
+                    self.width, self.height, compressed.len(), bytes.len(), read_ms, inflate_ms,
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
             }
             texture
         })
@@ -219,7 +235,14 @@ impl GlowRenderBackend {
 
             // Determine MSAA sample count.
             #[cfg(not(target_os = "vita"))]
-            let mut msaa_sample_count = quality.sample_count().min(4);
+            // Keep Flash stage quality unchanged; allow an explicit GPU-only A/B
+            // of multisampling overhead on memory-constrained Mali hardware.
+            // Only 1/2/4 samples are accepted; no setting preserves the old behavior.
+            let mut msaa_sample_count = std::env::var("DREAM_MSAA_SAMPLES")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|samples| matches!(*samples, 1 | 2 | 4))
+                .unwrap_or_else(|| quality.sample_count().min(4));
 
             //// Ensure that we don't exceed the max MSAA of this device.
             #[cfg(not(target_os = "vita"))]
@@ -229,6 +252,8 @@ impl GlowRenderBackend {
                 log::info!("Device only supports {max_samples}xMSAA");
                 msaa_sample_count = max_samples;
             }
+
+            eprintln!("dream_msaa_effective_samples={msaa_sample_count}");
 
             let max_texture_size = gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE) as u32;
 
