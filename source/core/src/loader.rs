@@ -23,8 +23,8 @@ use crate::bitmap::bitmap_data::BitmapData;
 use crate::bitmap::bitmap_data::Color;
 use crate::context::{ActionQueue, ActionType, UpdateContext};
 use crate::display_object::{
-    DisplayObject, MovieClip, MovieClipHandle, TDisplayObject, TDisplayObjectContainer,
-    TInteractiveObject,
+    DisplayObject, MovieClip, MovieClipData, MovieClipHandle, TDisplayObject,
+    TDisplayObjectContainer, TInteractiveObject,
 };
 use crate::events::ClipEvent;
 use crate::frame_lifecycle::catchup_display_object_to_frame;
@@ -245,12 +245,36 @@ pub struct PendingImport<'gc> {
     /// Number of preload ticks spent on this import, for diagnostics.
     #[collect(require_static)]
     ticks: u32,
+    /// The imported movie, kept so the fully preloaded library can be cached
+    /// for reuse by later importers of the same URL.
+    #[collect(require_static)]
+    movie: Arc<SwfMovie>,
+}
+
+/// A fully preloaded imported movie kept alive for reuse.
+///
+/// The `MovieLibrary` of a movie is keyed by a weak pointer to its
+/// `Arc<SwfMovie>` and dropped once the last strong reference goes away;
+/// holding the `Arc` here therefore keeps the parsed characters alive, and a
+/// later `ImportAssets` of the same URL only needs `Library::map_imports`
+/// instead of a full fetch + parse + preload (which costs 10-16 s for
+/// `gameAssets.swf`).
+#[derive(Collect)]
+#[collect(no_drop)]
+pub struct CachedImportMovie {
+    /// The resolved URL the movie was fetched from.
+    #[collect(require_static)]
+    url: String,
+    /// The parsed movie (the same allocation as the first import).
+    #[collect(require_static)]
+    movie: Arc<SwfMovie>,
 }
 
 /// Holds all in-progress loads for the player.
 pub struct LoadManager<'gc>(
     SlotMap<LoaderHandle, MovieLoader<'gc>>,
     Vec<PendingImport<'gc>>,
+    Vec<CachedImportMovie>,
 );
 
 unsafe impl<'gc> Collect<'gc> for LoadManager<'gc> {
@@ -261,18 +285,29 @@ unsafe impl<'gc> Collect<'gc> for LoadManager<'gc> {
         for pending in &self.1 {
             cc.trace(pending);
         }
+        for cached in &self.2 {
+            cc.trace(cached);
+        }
     }
 }
 
 impl<'gc> LoadManager<'gc> {
     /// Construct a new `LoadManager`.
     pub fn new() -> Self {
-        Self(SlotMap::with_key(), Vec::new())
+        Self(SlotMap::with_key(), Vec::new(), Vec::new())
     }
 
     /// Register an in-flight asset import to be driven by `preload_tick`.
     pub fn add_pending_import(&mut self, pending: PendingImport<'gc>) {
         self.1.push(pending);
+    }
+
+    /// Look up a previously preloaded import for `url`.
+    pub fn lookup_cached_import(&self, url: &str) -> Option<Arc<SwfMovie>> {
+        self.2
+            .iter()
+            .find(|cached| cached.url == url)
+            .map(|cached| cached.movie.clone())
     }
 
     /// Add a new loader to the `LoadManager`.
@@ -367,6 +402,37 @@ impl<'gc> LoadManager<'gc> {
             match wait_for_full_response(fetch).await {
                 Ok((body, url, _status, _redirected)) => {
                     let fetch_ms = fetch_started.elapsed().as_secs_f64() * 1000.0;
+
+                    // Reuse a previously preloaded movie for this URL: the parse
+                    // and the full preload (10-16 s for gameAssets.swf) are
+                    // identical for every importer, so only the export mapping
+                    // into this importer has to run.
+                    let cached = player
+                        .lock()
+                        .unwrap()
+                        .mutate_with_update_context(|uc| {
+                            uc.load_manager.lookup_cached_import(url.as_str())
+                        });
+                    if let Some(movie) = cached {
+                        let mapped = player.lock().unwrap().mutate_with_update_context(|uc| {
+                            let importer = importer_movie.fetch(uc);
+                            let mapped = MovieClipData::map_cached_import(
+                                uc,
+                                importer.movie(),
+                                movie.clone(),
+                            );
+                            importer.finish_importing();
+                            mapped
+                        });
+                        if trace_import {
+                            eprintln!(
+                                "dream_import_cached url={} mapped={} fetch_ms={:.2}",
+                                url, mapped, fetch_ms
+                            );
+                        }
+                        return Ok(());
+                    }
+
                     let content_type = ContentType::sniff(&body);
                     tracing::info!("Loading imported movie: {:?}", url);
                     match content_type {
@@ -387,7 +453,8 @@ impl<'gc> LoadManager<'gc> {
                             // `PendingImport`).
                             player.lock().unwrap().mutate_with_update_context(|uc| {
                                 let importer_clip = importer_movie.fetch(uc);
-                                let clip = MovieClip::new_import_assets(uc, movie, importer_clip);
+                                let clip =
+                                    MovieClip::new_import_assets(uc, movie.clone(), importer_clip);
 
                                 clip.set_cur_preload_frame(0);
 
@@ -401,6 +468,7 @@ impl<'gc> LoadManager<'gc> {
                                     url: url.to_string(),
                                     started: std::time::Instant::now(),
                                     ticks: 0,
+                                    movie,
                                 });
                             });
                             if trace_import {
@@ -522,13 +590,22 @@ impl<'gc> LoadManager<'gc> {
             let done = clip.preload(context, limit);
             if done {
                 importer.finish_importing();
-                let pending = &context.load_manager.1[i];
-                eprintln!(
-                    "dream_import_done url={} ticks={} elapsed_ms={:.1}",
-                    pending.url,
-                    pending.ticks,
-                    pending.started.elapsed().as_secs_f64() * 1000.0
-                );
+                let (url, movie) = {
+                    let pending = &context.load_manager.1[i];
+                    eprintln!(
+                        "dream_import_done url={} ticks={} elapsed_ms={:.1}",
+                        pending.url,
+                        pending.ticks,
+                        pending.started.elapsed().as_secs_f64() * 1000.0
+                    );
+                    (pending.url.clone(), pending.movie.clone())
+                };
+                // Keep the preloaded movie alive for later importers of the
+                // same URL (see `CachedImportMovie`).
+                context
+                    .load_manager
+                    .2
+                    .push(CachedImportMovie { url, movie });
                 finished.push(i);
             } else if ticks % 600 == 0 {
                 let pending = &context.load_manager.1[i];

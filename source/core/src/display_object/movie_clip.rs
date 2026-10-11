@@ -3281,6 +3281,21 @@ impl<'gc> MovieClipData<'gc> {
     pub fn movie(&self) -> Arc<SwfMovie> {
         self.shared.get().movie()
     }
+
+    /// Map a cached import's exports into this movie's library, replacing the
+    /// export mapping that normally happens while the imported movie is
+    /// preloaded (used when `LoadManager::lookup_cached_import` hits).
+    pub(crate) fn map_cached_import(
+        context: &mut UpdateContext<'gc>,
+        importer_movie: Arc<SwfMovie>,
+        source: Arc<SwfMovie>,
+    ) -> usize {
+        let applied = context.library.map_imports(importer_movie.clone(), source);
+        for (id, name) in &applied {
+            MovieClipShared::register_export(context, *id, *name, importer_movie.clone());
+        }
+        applied.len()
+    }
 }
 
 // Preloading of definition tags
@@ -3835,7 +3850,7 @@ impl<'gc, 'a> MovieClipShared<'gc> {
         Ok(())
     }
 
-    fn register_export(
+    pub(crate) fn register_export(
         context: &mut UpdateContext<'gc>,
         id: CharacterId,
         name: AvmString<'gc>,

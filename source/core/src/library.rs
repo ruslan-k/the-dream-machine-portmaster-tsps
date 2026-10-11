@@ -412,6 +412,10 @@ impl<'gc> MovieLibraries<'gc> {
         self.0.get(key)
     }
 
+    fn get_mut(&mut self, key: &Arc<SwfMovie>) -> Option<&mut MovieLibrary<'gc>> {
+        self.0.get_mut(key)
+    }
+
     fn get_or_insert_mut(&mut self, movie: Arc<SwfMovie>) -> &mut MovieLibrary<'gc> {
         // NOTE(Clippy): Cannot use or_default() here as PtrWeakKeyHashMap does not have such a method on its Entry API
         self.0
@@ -477,6 +481,46 @@ impl<'gc> Library<'gc> {
 
     pub fn library_for_movie_mut(&mut self, movie: Arc<SwfMovie>) -> &mut MovieLibrary<'gc> {
         self.movie_libraries.get_or_insert_mut(movie)
+    }
+
+    /// Map the exports of `source` into the `importer`'s pending imports,
+    /// replicating the export mapping that happens while an `ImportAssets`
+    /// source movie is preloaded. Used when a movie is imported from an
+    /// already-preloaded cache entry: the source's library is reused instead
+    /// of re-running the whole preload, so only the name mapping has to run.
+    ///
+    /// Returns the `(character id, export name)` pairs registered in the
+    /// importer's library, so the caller can also mark the characters'
+    /// exported names (`MovieClip::register_export`).
+    pub fn map_imports(
+        &mut self,
+        importer: Arc<SwfMovie>,
+        source: Arc<SwfMovie>,
+    ) -> Vec<(CharacterId, AvmString<'gc>)> {
+        let mut mappings: Vec<(CharacterId, AvmString<'gc>, Character<'gc>)> = Vec::new();
+
+        if let (Some(imp), Some(src)) = (
+            self.movie_libraries.get(&importer),
+            self.movie_libraries.get(&source),
+        ) {
+            for (name, parent_id) in &imp.imported_assets {
+                if let Some((_source_id, character)) = src.character_by_export_name(*name) {
+                    mappings.push((*parent_id, *name, character));
+                }
+            }
+        }
+
+        let mut applied = Vec::new();
+        if let Some(imp) = self.movie_libraries.get_mut(&importer) {
+            for (parent_id, name, character) in mappings {
+                if imp.register_character(parent_id, character) {
+                    imp.register_export(parent_id, name);
+                    applied.push((parent_id, name));
+                }
+            }
+        }
+
+        applied
     }
 
     pub fn known_movies(&self) -> Vec<Arc<SwfMovie>> {

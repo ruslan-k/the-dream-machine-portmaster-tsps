@@ -18,7 +18,7 @@ export RUSTFLAGS=""
 cargo fetch --locked --target aarch64-unknown-linux-gnu
 checkout=/usr/local/cargo/git/checkouts/ruffle-b1b568dcb5621339/563854a
 core_changed=0
-for f in src/backend/audio.rs src/loader.rs src/player.rs; do
+for f in src/backend/audio.rs src/loader.rs src/player.rs src/library.rs src/display_object.rs src/display_object/movie_clip.rs; do
   if ! cmp -s "/work/source/core/$f" "$checkout/core/$f"; then
     cp "/work/source/core/$f" "$checkout/core/$f"
     core_changed=1

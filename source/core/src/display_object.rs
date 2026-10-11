@@ -59,6 +59,7 @@ pub use interactive::{Avm2MousePick, InteractiveObject, TInteractiveObject};
 pub use loader_display::LoaderDisplay;
 pub use morph_shape::MorphShape;
 pub use movie_clip::{MovieClip, MovieClipHandle, MovieClipWeak, Scene};
+pub(crate) use movie_clip::MovieClipData;
 use ruffle_render::backend::{BitmapCacheEntry, RenderBackend};
 use ruffle_render::bitmap::{BitmapHandle, BitmapInfo, PixelSnapping};
 use ruffle_render::blend::ExtendedBlendMode;

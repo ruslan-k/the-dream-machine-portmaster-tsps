@@ -70,3 +70,14 @@ On-device evidence (2026-10-12, runtime `9bbeefb8...`):
 - `loop_ms` telemetry explains the earlier "10-second" loop iterations: a single tick runs the (unlimited-limit) preload chunk, e.g. `tick=9407 ms` during the gameAssets preload - the loading cost is real work, not a scheduler stall.
 
 Known remaining cost: every room re-imports `gameAssets.swf` and re-runs its full preload (~10-16 s per import, `lazy_bitmaps` reaching 12 300+ registrations / 4.7 GB raw cumulative). Deduplicating immutable imported data remains the next evidence-led target (see candidates above, item 2).
+
+## Fifth optimization: reuse preloaded imported movies (shipped)
+
+Scene transitions re-imported `gameAssets.swf` per room and re-ran its full preload (10-16 s each). The preloaded state is the movie's `MovieLibrary`, which the `Library` keys by a weak pointer to the movie's `Arc<SwfMovie>` and drops with the last strong reference; the import path therefore rebuilt it from scratch every time.
+
+Fix: completed imports are cached in the `LoadManager` (`CachedImportMovie` keeps the `Arc<SwfMovie>` alive, so its library survives). `load_asset_movie` looks the URL up after the fetch and, on a hit, skips the parse and the whole preload, running only `Library::map_imports` (the export-name mapping into the new importer, replicating what the preload-time export mapping does) before releasing the importer. The fetch remains (the resolved URL is only known from the response); the OS page cache makes it ~5-10 ms.
+
+On-device evidence (2026-10-12, runtime `c98ee123...`):
+- Cold first import: 12.4 s. Every later `gameAssets.swf` import: `dream_import_cached` at 5-36 ms (fetch included), ~1500x faster; 36+ cache hits in one session.
+- Owner-verified: island -> pit -> island transitions fast; pit leave button still works; zero `non-registered character ID 11/20` errors.
+- `gameAsset_fonts.swf` / `gameAsset_sounds.swf` also complete fast (nested fonts imports no longer re-run at all once `gameAssets` is cached, since the cached library already contains their characters).
