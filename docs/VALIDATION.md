@@ -57,3 +57,16 @@ No game textures, music or effects were reduced. No firmware memory/swap/GPU set
 ## Third optimization: single-sample MSAA mode (shipped)
 
 `DREAM_MSAA_SAMPLES` (default `1` in the launcher) renders through a single-sample renderbuffer/FBO and keeps the resolve pipeline, removing the 4x multisample fill cost while preserving stencil-based Flash masks. Measured on-device (2026-10-12): swap 27.8 -> 9.3 ms median during movement, 24 FPS locked while walking (was 11-20), no visual artifacts in DRM captures; the accepted cost is loss of MSAA edge smoothing. All other toggles from docs/PERFORMANCE_AB.md (cursor clear batching, click-sync A/B, load/texture traces, peak frame timings, read preallocation) are included in the same build. Exact hashes and the full A/B record are in docs/PROFILING.md.
+
+## Fourth optimization: complete asset imports before releasing importers (shipped)
+
+Root cause of the dighole ("pit") softlock: `islandDream_digHole` imports its leave button (`gx_closeBN` -> parent character ID 11) and interaction zones (`gx_interactionZone` -> ID 20) from `gameAssets.swf`. `gameAssets` itself imports `gameAsset_fonts.swf`, so the import's preload pauses mid-way; the loader released the importer after a single preload call, before the export mapping ran, so the room could never instantiate its leave button (log: `Tried to instantiate non-registered character ID 11`) and no input could leave the scene.
+
+Fix: `load_asset_movie` registers the import in a new `LoadManager` pending-import list instead of preloading inline. `Player::preload` drives `LoadManager::preload_imports` unconditionally (outside the `did_finish` gate that previously skipped it while the root movie was itself blocked on an import) and releases the importer (`finish_importing`) only once the whole movie, including nested imports, is preloaded. Changed: `source/core/src/loader.rs`, `source/core/src/player.rs`; `tools/build-aarch64.sh` now also syncs `src/player.rs` into the ruffle checkout.
+
+On-device evidence (2026-10-12, runtime `9bbeefb8...`):
+- `dream_import_registered` -> `dream_import_done` for `gameAssets.swf` (11.4 s, 10 ticks) and all four nested `gameAsset_fonts.swf` imports (~95-140 ms each); 77+ imports completed during the session, zero `non-registered character ID 11/20` errors.
+- Owner physically entered and left the pit: exit button present and functional.
+- `loop_ms` telemetry explains the earlier "10-second" loop iterations: a single tick runs the (unlimited-limit) preload chunk, e.g. `tick=9407 ms` during the gameAssets preload - the loading cost is real work, not a scheduler stall.
+
+Known remaining cost: every room re-imports `gameAssets.swf` and re-runs its full preload (~10-16 s per import, `lazy_bitmaps` reaching 12 300+ registrations / 4.7 GB raw cumulative). Deduplicating immutable imported data remains the next evidence-led target (see candidates above, item 2).

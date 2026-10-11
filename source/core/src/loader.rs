@@ -216,13 +216,50 @@ impl From<crate::avm1::Error<'_>> for Error {
     }
 }
 
+/// An in-flight `ImportAssets`/`ImportAssets2` load whose source movie is
+/// preloaded by the player's preload ticks.
+///
+/// `load_asset_movie` registers one of these instead of preloading the
+/// imported movie inline. The imported movie can itself contain nested
+/// `ImportAssets` tags (gameAssets imports gameAsset_fonts), which pause the
+/// preload until the nested load finishes; driving the preload from
+/// `preload_tick` keeps it alive across those pauses without depending on
+/// executor wakeups. The importer is only released (`finish_importing`) once
+/// the whole movie is preloaded and every exported character has been mapped
+/// into the importer's library, so rooms receive their imported characters
+/// (e.g. the dighole leave button `gx_closeBN` as parent ID 11).
+#[derive(Collect)]
+#[collect(no_drop)]
+pub struct PendingImport<'gc> {
+    /// The preloading import clip (the imported movie's root). Kept alive by
+    /// the `LoadManager`'s GC tracing.
+    clip: MovieClip<'gc>,
+    /// The movie that contained the `ImportAssets` tag.
+    importer: MovieClip<'gc>,
+    /// Source URL, for diagnostics.
+    #[collect(require_static)]
+    url: String,
+    /// When the import was registered, for diagnostics.
+    #[collect(require_static)]
+    started: std::time::Instant,
+    /// Number of preload ticks spent on this import, for diagnostics.
+    #[collect(require_static)]
+    ticks: u32,
+}
+
 /// Holds all in-progress loads for the player.
-pub struct LoadManager<'gc>(SlotMap<LoaderHandle, MovieLoader<'gc>>);
+pub struct LoadManager<'gc>(
+    SlotMap<LoaderHandle, MovieLoader<'gc>>,
+    Vec<PendingImport<'gc>>,
+);
 
 unsafe impl<'gc> Collect<'gc> for LoadManager<'gc> {
     fn trace<C: Trace<'gc>>(&self, cc: &mut C) {
         for (_, loader) in self.0.iter() {
             cc.trace(loader);
+        }
+        for pending in &self.1 {
+            cc.trace(pending);
         }
     }
 }
@@ -230,7 +267,12 @@ unsafe impl<'gc> Collect<'gc> for LoadManager<'gc> {
 impl<'gc> LoadManager<'gc> {
     /// Construct a new `LoadManager`.
     pub fn new() -> Self {
-        Self(SlotMap::with_key())
+        Self(SlotMap::with_key(), Vec::new())
+    }
+
+    /// Register an in-flight asset import to be driven by `preload_tick`.
+    pub fn add_pending_import(&mut self, pending: PendingImport<'gc>) {
+        self.1.push(pending);
     }
 
     /// Add a new loader to the `LoadManager`.
@@ -335,33 +377,36 @@ impl<'gc> LoadManager<'gc> {
                             let parse_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
 
                             let movie = Arc::new(movie);
-                            let mut preload_ms = 0.0;
 
+                            // Register the import for the player's preload ticks
+                            // instead of preloading it inline: the imported movie can
+                            // itself contain nested ImportAssets tags (gameAssets
+                            // imports gameAsset_fonts), which pause the preload.
+                            // `preload_tick` drives the preload to completion across
+                            // those pauses and only then releases the importer (see
+                            // `PendingImport`).
                             player.lock().unwrap().mutate_with_update_context(|uc| {
-                                let preload_started = std::time::Instant::now();
-                                let importer_movie = importer_movie.fetch(uc);
-                                let clip = MovieClip::new_import_assets(uc, movie, importer_movie);
+                                let importer_clip = importer_movie.fetch(uc);
+                                let clip = MovieClip::new_import_assets(uc, movie, importer_clip);
 
                                 clip.set_cur_preload_frame(0);
-                                let mut execution_limit = ExecutionLimit::none();
 
                                 tracing::debug!("Preloading swf to run exports {:?}", url);
 
                                 // Create library for exports before preloading
                                 uc.library.library_for_movie_mut(clip.movie());
-                                let res = clip.preload(uc, &mut execution_limit);
-                                tracing::debug!(
-                                    "Preloaded swf to run exports result {:?} {}",
-                                    url,
-                                    res
-                                );
-                                importer_movie.finish_importing();
-                                preload_ms = preload_started.elapsed().as_secs_f64() * 1000.0;
+                                uc.load_manager.add_pending_import(PendingImport {
+                                    clip,
+                                    importer: importer_clip,
+                                    url: url.to_string(),
+                                    started: std::time::Instant::now(),
+                                    ticks: 0,
+                                });
                             });
                             if trace_import {
                                 eprintln!(
-                                    "dream_import_swf url={} bytes={} fetch_ms={:.2} parse_ms={:.2} preload_ms={:.2}",
-                                    url, body.len(), fetch_ms, parse_ms, preload_ms
+                                    "dream_import_registered url={} bytes={} fetch_ms={:.2} parse_ms={:.2}",
+                                    url, body.len(), fetch_ms, parse_ms
                                 );
                             }
                             Ok(())
@@ -457,6 +502,47 @@ impl<'gc> LoadManager<'gc> {
         }
 
         did_finish
+    }
+
+    /// Drive pending asset imports (see `PendingImport`). Each call advances
+    /// every import clip's preload; nested imports simply leave it unfinished
+    /// until they complete on their own.
+    ///
+    /// This must run even while the root movie (or another loader) is blocked
+    /// waiting on an import, which is why it is not part of `preload_tick`'s
+    /// `did_finish` gate.
+    pub fn preload_imports(context: &mut UpdateContext<'gc>, limit: &mut ExecutionLimit) {
+        let mut finished: Vec<usize> = Vec::new();
+        for i in 0..context.load_manager.1.len() {
+            let (clip, importer, ticks) = {
+                let pending = &mut context.load_manager.1[i];
+                pending.ticks = pending.ticks.saturating_add(1);
+                (pending.clip, pending.importer, pending.ticks)
+            };
+            let done = clip.preload(context, limit);
+            if done {
+                importer.finish_importing();
+                let pending = &context.load_manager.1[i];
+                eprintln!(
+                    "dream_import_done url={} ticks={} elapsed_ms={:.1}",
+                    pending.url,
+                    pending.ticks,
+                    pending.started.elapsed().as_secs_f64() * 1000.0
+                );
+                finished.push(i);
+            } else if ticks % 600 == 0 {
+                let pending = &context.load_manager.1[i];
+                eprintln!(
+                    "dream_import_waiting url={} ticks={} elapsed_ms={:.1}",
+                    pending.url,
+                    pending.ticks,
+                    pending.started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        }
+        for i in finished.into_iter().rev() {
+            context.load_manager.1.remove(i);
+        }
     }
 
     pub fn run_exit_frame(context: &mut UpdateContext<'gc>) {

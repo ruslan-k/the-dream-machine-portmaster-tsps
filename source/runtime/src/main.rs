@@ -170,7 +170,10 @@ use ruffle_core::backend::navigator::SocketMode;
 #[cfg(any(target_os="vita",all(target_os="horizon",target_arch="aarch64"),target_os="ps4",target_os="ps5",target_os="ps3",target_os="wii",target_os="wiiu",target_os="gamecube",target_os="xbox",target_os="xboxone",target_os="linux",target_os="macos",target_os="windows"))]
 use ruffle_core::config::Letterbox;
 #[cfg(any(target_os="vita",all(target_os="horizon",target_arch="aarch64"),target_os="ps4",target_os="ps5",target_os="ps3",target_os="wii",target_os="wiiu",target_os="gamecube",target_os="xbox",target_os="xboxone",target_os="linux",target_os="macos",target_os="windows"))]
-use ruffle_core::events::{GamepadButton, KeyCode, MouseButton, ParseEnumError};
+use ruffle_core::events::{
+    GamepadButton, KeyCode, KeyDescriptor, KeyLocation, LogicalKey, MouseButton, NamedKey,
+    ParseEnumError, PhysicalKey,
+};
 #[cfg(any(target_os="vita",all(target_os="horizon",target_arch="aarch64"),target_os="ps4",target_os="ps5",target_os="ps3",target_os="wii",target_os="wiiu",target_os="gamecube",target_os="xbox",target_os="xboxone",target_os="linux",target_os="macos",target_os="windows"))]
 use ruffle_core::limits::ExecutionLimit;
 #[cfg(any(target_os="vita",all(target_os="horizon",target_arch="aarch64"),target_os="ps4",target_os="ps5",target_os="ps3",target_os="wii",target_os="wiiu",target_os="gamecube",target_os="xbox",target_os="xboxone",target_os="linux",target_os="macos",target_os="windows"))]
@@ -614,6 +617,9 @@ fn sdl2_main() {
     // the legacy synthetic MouseMove on every click with the direct path.
     let click_sync_move = std::env::var("DREAM_CLICK_SYNC_MOVE").as_deref() != Ok("0");
     eprintln!("dream_click_sync_move={click_sync_move}");
+    // Axis motion is continuous; keep its trace on a separate opt-in so
+    // DREAM_INPUT_TRACE=1 can log button delivery without SD-card spam.
+    let input_axis_trace = std::env::var("DREAM_INPUT_TRACE_AXIS").as_deref() == Ok("1");
     eprintln!("controller_devices={}", sdl_joystick.num_joysticks().unwrap_or(0));
     for i in 0..sdl_joystick.num_joysticks().unwrap_or(0) {
         if sdl_game_ctrl.is_game_controller(i) {
@@ -773,7 +779,9 @@ fn sdl2_main() {
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     // ── Main loop ─────────────────────────────────────────────────────────────
+    let mut loop_diag_last = Instant::now();
     'main: loop {
+        let loop_t0 = Instant::now();
         // Wii U exit check
         #[cfg(target_os = "wiiu")]
         if unsafe { !WHBProcIsRunning() } { break 'main; }
@@ -794,6 +802,7 @@ fn sdl2_main() {
             Ok(RuffleEvent::TaskPoll) => player_box.executor.poll_all(),
             Err(_) => {}
         }
+        let loop_t1 = Instant::now();
 
         // Events
         for event in event_pump.poll_iter() {
@@ -825,6 +834,19 @@ fn sdl2_main() {
                             player_ref.lock().unwrap().handle_event(PlayerEvent::MouseMove {x:cursor_x,y:cursor_y});
                         }
                         player_ref.lock().unwrap().handle_event(PlayerEvent::MouseDown {x:cursor_x,y:cursor_y,button:b,index:None});
+                    }
+                    if button == sdl2::controller::Button::Y {
+                        // Esc for the game's own key listener: dismisses
+                        // speech/popups, opens/closes the in-game menu and
+                        // offers the exit menu from the main menu.
+                        let esc = KeyDescriptor {
+                            physical_key: PhysicalKey::Escape,
+                            logical_key: LogicalKey::Named(NamedKey::Escape),
+                            key_location: KeyLocation::Standard,
+                        };
+                        let mut p = player_ref.lock().unwrap();
+                        p.handle_event(PlayerEvent::KeyDown { key: esc });
+                        p.handle_event(PlayerEvent::KeyUp { key: esc });
                     }
                     if button == sdl2::controller::Button::Start && controllers.iter().any(|c| c.button(sdl2::controller::Button::Back)) {break 'main;}
                     if button == sdl2::controller::Button::Back && controllers.iter().any(|c| c.button(sdl2::controller::Button::Start)) {break 'main;}
@@ -907,7 +929,7 @@ fn sdl2_main() {
 
                 // Analog stick → D-Pad emulation
                 sdl2::event::Event::ControllerAxisMotion { axis, value, .. } => {
-                    if input_trace { eprintln!("input_axis {:?} value={} focus={}",axis,value,sdl_window.has_input_focus()); }
+                    if input_trace && input_axis_trace { eprintln!("input_axis {:?} value={} focus={}",axis,value,sdl_window.has_input_focus()); }
                     let deadzone = 8000_i16;
                     let x_axis = axis == Axis::LeftX;
                     let y_axis = axis == Axis::LeftY;
@@ -938,6 +960,8 @@ fn sdl2_main() {
                 _ => {}
             }
         }
+
+        let loop_t2 = Instant::now();
 
         // Tick + render
         let now = Instant::now();
@@ -992,6 +1016,8 @@ fn sdl2_main() {
                         diag_frames = 0; diag_time = Instant::now();
                     }
                 }
+                let loop_t3 = Instant::now();
+
                 // Pace polling to the next SWF frame/timer instead of spinning
                 // thousands of times per second over AVM2/audio/controller state.
                 let wait = p.time_til_next_frame()
@@ -1000,6 +1026,17 @@ fn sdl2_main() {
                     .max(std::time::Duration::from_millis(1));
                 drop(p);
                 std::thread::sleep(wait);
+                if loop_diag_last.elapsed().as_secs_f64() >= 2.0 {
+                    let loop_t4 = Instant::now();
+                    eprintln!(
+                        "loop_ms recv={:.1} events={:.1} tick={:.1} sleep={:.1}",
+                        (loop_t1 - loop_t0).as_secs_f64() * 1000.0,
+                        (loop_t2 - loop_t1).as_secs_f64() * 1000.0,
+                        (loop_t3 - loop_t2).as_secs_f64() * 1000.0,
+                        (loop_t4 - loop_t3).as_secs_f64() * 1000.0
+                    );
+                    loop_diag_last = Instant::now();
+                }
             }
         }
     }

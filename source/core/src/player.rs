@@ -1983,6 +1983,11 @@ impl Player {
                 }
             }
 
+            // Drive pending asset imports unconditionally: the root movie may
+            // be blocked waiting on one of them, in which case the loader tick
+            // below is skipped.
+            LoadManager::preload_imports(context, limit);
+
             if did_finish {
                 did_finish = LoadManager::preload_tick(context, limit);
             }

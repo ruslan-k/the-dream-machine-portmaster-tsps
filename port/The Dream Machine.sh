@@ -48,7 +48,14 @@ if [ -z "${sdl_controllerconfig:-}" ]; then
 fi
 export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
 export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1
-export DREAM_INPUT_TRACE="${DREAM_INPUT_TRACE:-0}"
+# Diagnostic round (scene-transition + input tracing): revert to 0 after the
+# investigation. DREAM_INPUT_TRACE logs controller button events;
+# DREAM_INPUT_TRACE_AXIS additionally logs every axis motion (chatty).
+export DREAM_INPUT_TRACE="${DREAM_INPUT_TRACE:-1}"
+export DREAM_INPUT_TRACE_AXIS="${DREAM_INPUT_TRACE_AXIS:-0}"
+export DREAM_LOAD_TRACE="${DREAM_LOAD_TRACE:-1}"
+export DREAM_TEXTURE_TRACE="${DREAM_TEXTURE_TRACE:-1}"
+echo "traces: input=$DREAM_INPUT_TRACE axis=$DREAM_INPUT_TRACE_AXIS load=$DREAM_LOAD_TRACE texture=$DREAM_TEXTURE_TRACE"
 export DREAM_LOG_LEVEL="${DREAM_LOG_LEVEL:-warn}"
 export RUST_BACKTRACE=1
 export TOR_AUDIO_SAMPLES=1024
