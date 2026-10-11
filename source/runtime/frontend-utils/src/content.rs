@@ -50,9 +50,24 @@ impl PlayingContent {
                 let path = url
                     .to_file_path()
                     .map_err(|_| std::io::Error::other("Could not turn url into file path"))?;
-                let mut result = vec![];
+                let trace = std::env::var("DREAM_LOAD_TRACE").as_deref() == Ok("1");
+                let started = std::time::Instant::now();
                 let mut file = interface.open_file(&path).await?;
+                let mut result = Vec::new();
+                // Imported SWFs are regular local files. Reserve their size to
+                // avoid repeated growth/copying during synchronous read_to_end.
+                // Cap the hint for corrupt/oversized files on a 1 GiB handheld.
+                if let Ok(info) = file.metadata() {
+                    if info.is_file() && info.len() <= 128 * 1024 * 1024 {
+                        let _ = result.try_reserve_exact(info.len() as usize);
+                    }
+                }
                 file.read_to_end(&mut result)?;
+                if trace {
+                    eprintln!("dream_asset_read bytes={} elapsed_ms={:.2} path={}",
+                        result.len(), started.elapsed().as_secs_f64() * 1000.0,
+                        path.display());
+                }
                 Ok(result)
             }
             PlayingContent::Bundle(_, bundle) => {
