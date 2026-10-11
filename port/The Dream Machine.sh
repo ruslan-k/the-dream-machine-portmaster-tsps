@@ -60,6 +60,14 @@ if [ "${DREAM_BITMAP_CACHE:-1}" = 1 ]; then
 else
   unset TOR_BITMAP_CACHE_DIR
 fi
+# MSAA sample count for the glow renderer (DREAM_MSAA_SAMPLES=1|2|4).
+# 4 = baseline (stage quality HIGH); 1 = single-sample FBO: no multisampling,
+# but the FBO + resolve pipeline is kept because stencil-based Flash masks
+# need it (the KMSDRM default framebuffer has no stencil buffer).
+# NOTE: Mali-G57 silently rounds 2x requests up to 4x, so only 1/4 matter here.
+# Reversible A/B knob.
+export DREAM_MSAA_SAMPLES="${DREAM_MSAA_SAMPLES:-1}"
+echo "msaa_samples=$DREAM_MSAA_SAMPLES"
 if [ -r /proc/asound/cards ] && grep -q '\[audiocodec' /proc/asound/cards; then
   export ALSA_CONFIG_PATH="$GAMEDIR/asound.conf"
 fi

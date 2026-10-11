@@ -610,6 +610,10 @@ fn sdl2_main() {
     let mut controllers: Vec<sdl2::controller::GameController> = Vec::new();
     let input_setting = std::env::var("DREAM_INPUT_TRACE").ok();
     let input_trace = diagnostic_log::input_trace_from_setting(input_setting.as_deref());
+    // A MouseDown already carries its coordinates. Optional A/B compares
+    // the legacy synthetic MouseMove on every click with the direct path.
+    let click_sync_move = std::env::var("DREAM_CLICK_SYNC_MOVE").as_deref() != Ok("0");
+    eprintln!("dream_click_sync_move={click_sync_move}");
     eprintln!("controller_devices={}", sdl_joystick.num_joysticks().unwrap_or(0));
     for i in 0..sdl_joystick.num_joysticks().unwrap_or(0) {
         if sdl_game_ctrl.is_game_controller(i) {
@@ -760,6 +764,7 @@ fn sdl2_main() {
     let mut diag_frames: u64 = 0;
     let mut diag_time = Instant::now();
     let mut phase_ms = [0.0_f64; 4];
+    let mut phase_max_ms = [0.0_f64; 3];
     let mut tick_calls: u64 = 0;
     let filter_warp_echo = std::env::var("DREAM_WARP_ECHO_FILTER").map(|v| v == "1").unwrap_or(true);
     let mut warp_echo = warp_echo::WarpEchoFilter::default();
@@ -816,7 +821,9 @@ fn sdl2_main() {
                     if input_trace { eprintln!("input_button_down {:?} cursor={},{} focus={}",button,cursor_x,cursor_y,sdl_window.has_input_focus()); }
                     if button == sdl2::controller::Button::A || button == sdl2::controller::Button::B {
                         let b = if button == sdl2::controller::Button::A {MouseButton::Left} else {MouseButton::Right};
-                        player_ref.lock().unwrap().handle_event(PlayerEvent::MouseMove {x:cursor_x,y:cursor_y});
+                        if click_sync_move {
+                            player_ref.lock().unwrap().handle_event(PlayerEvent::MouseMove {x:cursor_x,y:cursor_y});
+                        }
                         player_ref.lock().unwrap().handle_event(PlayerEvent::MouseDown {x:cursor_x,y:cursor_y,button:b,index:None});
                     }
                     if button == sdl2::controller::Button::Start && controllers.iter().any(|c| c.button(sdl2::controller::Button::Back)) {break 'main;}
@@ -957,24 +964,31 @@ fn sdl2_main() {
                 }
                 let tick_begin = Instant::now();
                 p.tick(dt as f64 / 1000.0);
-                phase_ms[1] += tick_begin.elapsed().as_secs_f64() * 1000.0;
+                let tick_ms = tick_begin.elapsed().as_secs_f64() * 1000.0;
+                phase_ms[1] += tick_ms;
+                phase_max_ms[0] = phase_max_ms[0].max(tick_ms);
                 tick_calls += 1;
                 if p.needs_render() {
                     let draw_begin = Instant::now();
                     p.render();
                     #[cfg(target_os="linux")]
                     unsafe { dream_cursor::draw(&cursor_gl,cursor_x.round() as i32,cursor_y.round() as i32,dimensions.width as i32,dimensions.height as i32); }
-                    phase_ms[2] += draw_begin.elapsed().as_secs_f64() * 1000.0;
+                    let draw_ms = draw_begin.elapsed().as_secs_f64() * 1000.0;
+                    phase_ms[2] += draw_ms;
+                    phase_max_ms[1] = phase_max_ms[1].max(draw_ms);
                     let swap_begin = Instant::now();
                     sdl_window.gl_swap_window();
-                    phase_ms[3] += swap_begin.elapsed().as_secs_f64() * 1000.0;
+                    let swap_ms = swap_begin.elapsed().as_secs_f64() * 1000.0;
+                    phase_ms[3] += swap_ms;
+                    phase_max_ms[2] = phase_max_ms[2].max(swap_ms);
                     diag_frames += 1;
                     if diag_time.elapsed().as_secs_f64() >= 5.0 {
                         eprintln!("render_fps={:.2}", diag_frames as f64 / diag_time.elapsed().as_secs_f64());
                         eprintln!("phase_ms_per_render lock={:.2} tick={:.2} draw={:.2} swap={:.2} tick_calls={} swf_fps={:.1}",phase_ms[0]/diag_frames as f64,phase_ms[1]/diag_frames as f64,phase_ms[2]/diag_frames as f64,phase_ms[3]/diag_frames as f64,tick_calls,p.frame_rate());
+                        eprintln!("phase_max_ms tick={:.2} draw={:.2} swap={:.2}",phase_max_ms[0],phase_max_ms[1],phase_max_ms[2]);
                         eprintln!("mouse_events native={} warp_echo_skipped={} controller_moves={}",mouse_event_counts[0],mouse_event_counts[1],mouse_event_counts[2]);
                         mouse_event_counts = [0;3];
-                        phase_ms = [0.0;4]; tick_calls = 0;
+                        phase_ms = [0.0;4]; phase_max_ms = [0.0;3]; tick_calls = 0;
                         diag_frames = 0; diag_time = Instant::now();
                     }
                 }

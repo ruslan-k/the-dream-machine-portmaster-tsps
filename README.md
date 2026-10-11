@@ -60,6 +60,10 @@ SSH shell. Existing `storage` must be preserved across updates.
 Controls: left stick or D-pad moves cursor; A left-click; B right-click;
 L slows cursor; Start+Select exits. Detailed logging is opt-in: `DREAM_LOG_LEVEL=info` and
 `DREAM_INPUT_TRACE=1`. The default keeps warnings/errors and FPS telemetry.
+Renderer A/B knobs: `DREAM_MSAA_SAMPLES=1|2|4` (default 1 = single-sample FBO,
+no multisampling; 4 = full-quality MSAA), `DREAM_CLICK_SYNC_MOVE`,
+`DREAM_LOAD_TRACE`, `DREAM_TEXTURE_TRACE` — see
+[docs/PERFORMANCE_AB.md](docs/PERFORMANCE_AB.md) for the device A/B procedure.
 
 ## Runtime build
 

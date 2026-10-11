@@ -318,20 +318,27 @@ impl<'gc> LoadManager<'gc> {
         let importer_movie = MovieClipHandle::stash(uc, importer_movie);
 
         Box::pin(async move {
+            let trace_import = std::env::var("DREAM_LOAD_TRACE").as_deref() == Ok("1");
+            let fetch_started = std::time::Instant::now();
             let fetch = player.lock().unwrap().navigator().fetch(request);
 
             match wait_for_full_response(fetch).await {
                 Ok((body, url, _status, _redirected)) => {
+                    let fetch_ms = fetch_started.elapsed().as_secs_f64() * 1000.0;
                     let content_type = ContentType::sniff(&body);
                     tracing::info!("Loading imported movie: {:?}", url);
                     match content_type {
                         ContentType::Swf => {
+                            let parse_started = std::time::Instant::now();
                             let movie = SwfMovie::from_data(&body, url.clone(), Some(url.clone()))
                                 .expect("Could not load movie");
+                            let parse_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
 
                             let movie = Arc::new(movie);
+                            let mut preload_ms = 0.0;
 
                             player.lock().unwrap().mutate_with_update_context(|uc| {
+                                let preload_started = std::time::Instant::now();
                                 let importer_movie = importer_movie.fetch(uc);
                                 let clip = MovieClip::new_import_assets(uc, movie, importer_movie);
 
@@ -349,7 +356,14 @@ impl<'gc> LoadManager<'gc> {
                                     res
                                 );
                                 importer_movie.finish_importing();
+                                preload_ms = preload_started.elapsed().as_secs_f64() * 1000.0;
                             });
+                            if trace_import {
+                                eprintln!(
+                                    "dream_import_swf url={} bytes={} fetch_ms={:.2} parse_ms={:.2} preload_ms={:.2}",
+                                    url, body.len(), fetch_ms, parse_ms, preload_ms
+                                );
+                            }
                             Ok(())
                         }
                         _ => {

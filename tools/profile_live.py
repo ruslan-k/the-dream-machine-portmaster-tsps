@@ -4,7 +4,7 @@ root=Path('/mnt/SDCARD/Roms/PORTS/dreammachine')
 processes=[]
 for p in Path('/proc').glob('[0-9]*'):
  try:
-  if (p/'cmdline').read_bytes().startswith(b'//mnt/SDCARD/Roms//ports/dreammachine/ruffle'):processes.append(p)
+  if b'dreammachine/ruffle' in (p/'cmdline').read_bytes():processes.append(p)
  except OSError:pass
 assert len(processes)==1,processes
 p=processes[0];pid=int(p.name);page=os.sysconf('SC_PAGE_SIZE')

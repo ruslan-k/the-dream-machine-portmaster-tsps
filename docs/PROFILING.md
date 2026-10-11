@@ -47,3 +47,28 @@ Observed five retained warning records accounting for 161 suppressed repetitions
 ## Remaining evidence needed
 
 Record matched repeated walking/item interactions, preferably a device-side physical pad/mouse session, and identify whether stalls coincide with AVM/hit testing, first-use decode/upload, major faults, or asset import. Do not claim that lower memory or eliminated duplicate events has fixed all stutter. Never reduce textures/audio or alter Flash event/timer semantics merely to increase a counter.
+
+## MSAA 4x was the dominant GPU cost (single-sample FBO A/B, 2026-10-11/12)
+
+Live diagnosis on a running user session, read-only: the five-second telemetry showed the present phase (swap) at 24-28 ms per frame — 62% of the 41.7 ms 24-FPS budget — while tick ran 10-14 ms calm and 20-25 ms during cursor movement (movement windows fell to 11-20 FPS). Mali DVFS counters measured the GPU busy 50% of wall time (~24 ms GPU per frame at the default 150 MHz step).
+
+Device probes (read-only, pbuffer/GBM, no display use):
+
+- Mali-G57, ES 3.2 context, `GL_MAX_SAMPLES=4`; a 4x multisample renderbuffer at 1280x720 works.
+- **The driver silently rounds a 2x MSAA request up to 4x** (`GL_RENDERBUFFER_SAMPLES` reports 4 after requesting 2), so an MSAA A/B on this device is only meaningful as 1 versus 4.
+- Panel timing: 60 Hz (74250 kHz, htotal 1650, vtotal 750).
+- The glow backend had been rendering every frame through a 4x MSAA renderbuffer, a resolve blit and a full-screen resolve quad.
+
+Measured A/B (same device, same scene, user-driven sessions):
+
+| Variant | swap (median) | movement FPS | notes |
+| --- | --- | --- | --- |
+| 4x MSAA (baseline) | 27.8 ms | 11-20 | original behavior |
+| direct to swapchain, no MSAA at all | 7.4-8.8 ms | 24 locked | **broke masks** (see below) |
+| single-sample FBO + resolve (`DREAM_MSAA_SAMPLES=1`) | 9.3 ms | 24 locked | shipped |
+
+The direct variant broke stencil-based Flash masks: the KMSDRM default framebuffer has no stencil buffer (SDL requests `EGL_STENCIL_SIZE` 0), while the game uses masks heavily (231 `clipDepth` records in `gameAssets` alone, 23 in the island SWF). On the real device this produced a solid untextured block for the campfire and a shifted top UI bar. DRM captures verified the artifacts and their absence after the fix.
+
+The shipped variant keeps the renderbuffer/FBO + stencil + resolve pipeline and only drops multisampling, so masks keep working; the remaining frame budget: tick 13-19 ms, draw 4-5 ms, swap ~9.3 ms — 24 FPS locked even while walking, with `phase_max_ms` peaks small in gameplay (tick <= ~40 ms, swap <= ~10 ms). Scene-loading stalls (tick spikes up to ~2.9 s) remain a separate, traced problem: `DREAM_LOAD_TRACE=1` / `DREAM_TEXTURE_TRACE=1` report import fetch/parse/preload and first-use texture timings.
+
+Governor note: a live `performance` pin (600 MHz cap) cut swap 27.7 -> 22.5 ms before this change; after the single-sample fix the cadence is already at the 24 FPS target, so the governor remains opt-in (`DREAM_GPU_PERFORMANCE=0`).

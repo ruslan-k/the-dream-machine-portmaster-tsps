@@ -169,10 +169,19 @@ impl RegistryData {
     // during preload. Preserve exact pixels; instantiate on first use/readback.
     fn texture(&self) -> glow::Texture {
         *self.texture.get_or_init(|| unsafe {
+            // First-use decoding/upload happens synchronously on the render
+            // thread. Optional slow-path timings distinguish storage, zlib
+            // inflation and GL submission without changing asset semantics.
+            let trace_texture = std::env::var("DREAM_TEXTURE_TRACE").as_deref() == Ok("1");
+            let started = std::time::Instant::now();
             let (format, compressed) = self.deferred.lock().unwrap().take()
                 .expect("Uninitialized texture must have deferred pixels");
-            let bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed.compressed())
+            let compressed = compressed.compressed();
+            let read_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let inflated = std::time::Instant::now();
+            let bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed)
                 .expect("Locally compressed bitmap must decode");
+            let inflate_ms = inflated.elapsed().as_secs_f64() * 1000.0;
             let texture = self.gl.create_texture().expect("Unable to create texture");
             self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             self.gl.tex_image_2d(glow::TEXTURE_2D, 0, format as i32,
@@ -184,6 +193,13 @@ impl RegistryData {
                 (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
                 (glow::TEXTURE_MAG_FILTER, glow::LINEAR)] {
                 self.gl.tex_parameter_i32(glow::TEXTURE_2D, param, value as i32);
+            }
+            if trace_texture && started.elapsed().as_millis() >= 10 {
+                eprintln!(
+                    "dream_texture_first_use width={} height={} compressed={} decoded={} read_ms={:.2} inflate_ms={:.2} total_ms={:.2}",
+                    self.width, self.height, compressed.len(), bytes.len(), read_ms, inflate_ms,
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
             }
             texture
         })
@@ -217,9 +233,24 @@ impl GlowRenderBackend {
         unsafe {
             let gl = glow_context;
 
-            // Determine MSAA sample count.
+            // Determine MSAA sample count. The default follows the requested
+            // stage quality (4x on this device). DREAM_MSAA_SAMPLES=1 (or 0)
+            // renders single-sampled: no multisampling, but the renderbuffer/
+            // FBO + resolve pipeline stays because stencil-based Flash masks
+            // need the FBO stencil attachment (the KMSDRM default framebuffer
+            // has no stencil buffer). 2 requests 2x (NOTE: Mali-G57 silently
+            // rounds 2x up to 4x). Only 1/2/4 are accepted; any other value
+            // keeps the default. Reversible A/B knob.
             #[cfg(not(target_os = "vita"))]
-            let mut msaa_sample_count = quality.sample_count().min(4);
+            let mut msaa_sample_count = match std::env::var("DREAM_MSAA_SAMPLES")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+            {
+                Some(0) | Some(1) => 1,
+                Some(2) => 2,
+                Some(4) => 4,
+                _ => quality.sample_count().min(4),
+            };
 
             //// Ensure that we don't exceed the max MSAA of this device.
             #[cfg(not(target_os = "vita"))]
@@ -229,6 +260,8 @@ impl GlowRenderBackend {
                 log::info!("Device only supports {max_samples}xMSAA");
                 msaa_sample_count = max_samples;
             }
+            #[cfg(not(target_os = "vita"))]
+            eprintln!("dream_msaa_effective_samples={msaa_sample_count}");
 
             let max_texture_size = gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE) as u32;
 
@@ -461,26 +494,48 @@ impl GlowRenderBackend {
                 .create_renderbuffer()
                 .expect(&Error::UnableToCreateRenderBuffer.to_string());
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(color_renderbuffer));
-            gl.renderbuffer_storage_multisample(
-                glow::RENDERBUFFER,
-                self.msaa_sample_count as i32,
-                glow::RGBA8,
-                self.renderbuffer_width,
-                self.renderbuffer_height,
-            );
+            if self.msaa_sample_count <= 1 {
+                // Single-sample path (DREAM_MSAA_SAMPLES=1): no multisampling,
+                // but keep the FBO + stencil + resolve pipeline so stencil-based
+                // Flash masks keep working; the KMSDRM default framebuffer has
+                // no stencil buffer of its own.
+                gl.renderbuffer_storage(
+                    glow::RENDERBUFFER,
+                    glow::RGBA8,
+                    self.renderbuffer_width,
+                    self.renderbuffer_height,
+                );
+            } else {
+                gl.renderbuffer_storage_multisample(
+                    glow::RENDERBUFFER,
+                    self.msaa_sample_count as i32,
+                    glow::RGBA8,
+                    self.renderbuffer_width,
+                    self.renderbuffer_height,
+                );
+            }
             //gl.check_error("renderbuffer_storage_multisample (color)")?;
 
             let stencil_renderbuffer = gl
                 .create_renderbuffer()
                 .expect(&Error::UnableToCreateFrameBuffer.to_string());
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(stencil_renderbuffer));
-            gl.renderbuffer_storage_multisample(
-                glow::RENDERBUFFER,
-                self.msaa_sample_count as i32,
-                glow::STENCIL_INDEX8,
-                self.renderbuffer_width,
-                self.renderbuffer_height,
-            );
+            if self.msaa_sample_count <= 1 {
+                gl.renderbuffer_storage(
+                    glow::RENDERBUFFER,
+                    glow::STENCIL_INDEX8,
+                    self.renderbuffer_width,
+                    self.renderbuffer_height,
+                );
+            } else {
+                gl.renderbuffer_storage_multisample(
+                    glow::RENDERBUFFER,
+                    self.msaa_sample_count as i32,
+                    glow::STENCIL_INDEX8,
+                    self.renderbuffer_width,
+                    self.renderbuffer_height,
+                );
+            }
             //gl.check_error("renderbuffer_storage_multisample (stencil)")?;
 
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(render_framebuffer));

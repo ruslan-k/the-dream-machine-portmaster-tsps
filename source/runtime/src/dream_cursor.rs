@@ -13,19 +13,24 @@ pub unsafe fn draw(gl: &glow::Context, x: i32, y: i32, width: i32, height: i32) 
     gl.color_mask(true, true, true, true);
     // An outlined white arrow. Clearing narrow scissored spans needs no shader,
     // texture, blend or vertex-state changes and leaves game pixel data intact.
-    for row in 0..24 {
-        let (left, right) = if row < 17 { (0, row * 2 / 3 + 1) } else { (5, 10) };
-        let px = x + left;
-        let py = height - 1 - y - row;
-        if px >= width || py < 0 || py >= height { continue; }
-        let n = (right-left).min(width-px);
-        if n <= 0 { continue; }
-        gl.scissor(px, py, n, 1);
-        gl.clear_color(0.0, 0.0, 0.0, 1.0);
-        gl.clear(glow::COLOR_BUFFER_BIT);
-        if row > 0 && row < 23 && n > 2 {
-            gl.scissor(px+1, py, n-2, 1);
-            gl.clear_color(1.0, 1.0, 1.0, 1.0);
+    // Batch by color: preserve the exact original arrow pixels, but set
+    // glClearColor only twice rather than for every outlined scanline.
+    for inner in [false, true] {
+        let color = if inner { 1.0 } else { 0.0 };
+        gl.clear_color(color, color, color, 1.0);
+        for row in 0..24 {
+            let (left, right) = if row < 17 { (0, row * 2 / 3 + 1) } else { (5, 10) };
+            let px = x + left;
+            let py = height - 1 - y - row;
+            if px >= width || py < 0 || py >= height { continue; }
+            let n = (right-left).min(width-px);
+            if n <= 0 { continue; }
+            if inner {
+                if row == 0 || row >= 23 || n <= 2 { continue; }
+                gl.scissor(px+1, py, n-2, 1);
+            } else {
+                gl.scissor(px, py, n, 1);
+            }
             gl.clear(glow::COLOR_BUFFER_BIT);
         }
     }

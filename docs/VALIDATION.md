@@ -4,7 +4,7 @@
 
 - Original supported SWF: `8d26128a342b60ae457c0a7476821d11959818e1669308c258125ba4269aa938`.
 - Prepared SWF: `b790348ffa130600ebe52588aab1762e75a14450041b66fa1b46720b9b37bd81`.
-- Current runtime: `666b97b384f033032552fe56b54197d4d0988b87c93fc7ede8ddf8000e6772e3`.
+- Current runtime: `e404040c70bbb6d25de543ad1d80a310aa379aa931d07bf12416a925050c8fa5` (single-sample MSAA mode + PR#1 instrumentation; launcher `76e542c556e35a8e206770345aa39248e47fbd616a2c58859b7a4545035ae1b2`).
 - Runtime rebuilt successfully from this source with Rust/AArch64 GCC and stripped; deployed SHA-256 read back.
 - Offline recovery Dockerfile built successfully. Recovery repeated from the owner's actual installer; exact original main SWF hash matched.
 - Original SWF retained locally/on-device. The save-backend patch has an exact one-byte delta; truncation and corruption reject.
@@ -53,3 +53,7 @@ Current binary SHA-256 `3a6b7961f74caa4c36d736e9dced75e58a83eb66b85aab2b259a0c40
 5. Check whether matching-scene GPU governor A/B actually helps before pinning it. CPU already runs at the performance preset; GPU frequency alone is not proof of a bottleneck.
 
 No game textures, music or effects were reduced. No firmware memory/swap/GPU settings were changed. Save/reload and later chapter progression remain unverified; this is a development port.
+
+## Third optimization: single-sample MSAA mode (shipped)
+
+`DREAM_MSAA_SAMPLES` (default `1` in the launcher) renders through a single-sample renderbuffer/FBO and keeps the resolve pipeline, removing the 4x multisample fill cost while preserving stencil-based Flash masks. Measured on-device (2026-10-12): swap 27.8 -> 9.3 ms median during movement, 24 FPS locked while walking (was 11-20), no visual artifacts in DRM captures; the accepted cost is loss of MSAA edge smoothing. All other toggles from docs/PERFORMANCE_AB.md (cursor clear batching, click-sync A/B, load/texture traces, peak frame timings, read preallocation) are included in the same build. Exact hashes and the full A/B record are in docs/PROFILING.md.

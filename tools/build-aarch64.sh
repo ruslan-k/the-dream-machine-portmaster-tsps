@@ -16,9 +16,15 @@ export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconf
 export CARGO_BUILD_JOBS=6
 export RUSTFLAGS=""
 cargo fetch --locked --target aarch64-unknown-linux-gnu
-core=/usr/local/cargo/git/checkouts/ruffle-b1b568dcb5621339/563854a/core/src/backend/audio.rs
-if ! cmp -s /work/source/core/src/backend/audio.rs "$core"; then
-  cp /work/source/core/src/backend/audio.rs "$core"
+checkout=/usr/local/cargo/git/checkouts/ruffle-b1b568dcb5621339/563854a
+core_changed=0
+for f in src/backend/audio.rs src/loader.rs; do
+  if ! cmp -s "/work/source/core/$f" "$checkout/core/$f"; then
+    cp "/work/source/core/$f" "$checkout/core/$f"
+    core_changed=1
+  fi
+done
+if [ "$core_changed" = 1 ]; then
   cargo clean --release -p ruffle_core --target aarch64-unknown-linux-gnu
 fi
 mkdir -p /work/test-tmp
