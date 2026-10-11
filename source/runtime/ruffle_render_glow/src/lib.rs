@@ -253,6 +253,7 @@ impl GlowRenderBackend {
                 msaa_sample_count = max_samples;
             }
 
+            #[cfg(not(target_os = "vita"))]
             eprintln!("dream_msaa_effective_samples={msaa_sample_count}");
 
             let max_texture_size = gl.get_parameter_i32(glow::MAX_TEXTURE_SIZE) as u32;
