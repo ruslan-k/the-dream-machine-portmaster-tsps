@@ -81,3 +81,7 @@ On-device evidence (2026-10-12, runtime `c98ee123...`):
 - Cold first import: 12.4 s. Every later `gameAssets.swf` import: `dream_import_cached` at 5-36 ms (fetch included), ~1500x faster; 36+ cache hits in one session.
 - Owner-verified: island -> pit -> island transitions fast; pit leave button still works; zero `non-registered character ID 11/20` errors.
 - `gameAsset_fonts.swf` / `gameAsset_sounds.swf` also complete fast (nested fonts imports no longer re-run at all once `gameAssets` is cached, since the cached library already contains their characters).
+
+## Static check: all room imports across all chapters (2026-10-12)
+
+`tools/check_imports.py` walks every room SWF's `ImportAssets`/`ImportAssets2` tags (raw tag-stream parsing) and verifies each imported name against the named source asset's `ExportAssets` list. Result on the shipping data set: 295 rooms (TDM_chapter1-6) checked, 965 import entries, **0 problems** - no other room hides the dighole class of bug (an import name missing from its source). The pit failure was purely the runtime registration bug fixed above; the import cache now serves every room's imports from the shared preloaded libraries.
