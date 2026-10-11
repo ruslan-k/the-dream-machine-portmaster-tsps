@@ -48,14 +48,16 @@ if [ -z "${sdl_controllerconfig:-}" ]; then
 fi
 export SDL_GAMECONTROLLERCONFIG="$sdl_controllerconfig"
 export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1
-# Diagnostic round (scene-transition + input tracing): revert to 0 after the
-# investigation. DREAM_INPUT_TRACE logs controller button events;
+# Diagnostic traces are opt-in (defaults off): export DREAM_INPUT_TRACE=1,
+# DREAM_LOAD_TRACE=1, DREAM_TEXTURE_TRACE=1, DREAM_LOOP_TRACE=1 to investigate
+# input, imported-asset loading, texture decode or main-loop pacing.
 # DREAM_INPUT_TRACE_AXIS additionally logs every axis motion (chatty).
-export DREAM_INPUT_TRACE="${DREAM_INPUT_TRACE:-1}"
+export DREAM_INPUT_TRACE="${DREAM_INPUT_TRACE:-0}"
 export DREAM_INPUT_TRACE_AXIS="${DREAM_INPUT_TRACE_AXIS:-0}"
-export DREAM_LOAD_TRACE="${DREAM_LOAD_TRACE:-1}"
-export DREAM_TEXTURE_TRACE="${DREAM_TEXTURE_TRACE:-1}"
-echo "traces: input=$DREAM_INPUT_TRACE axis=$DREAM_INPUT_TRACE_AXIS load=$DREAM_LOAD_TRACE texture=$DREAM_TEXTURE_TRACE"
+export DREAM_LOAD_TRACE="${DREAM_LOAD_TRACE:-0}"
+export DREAM_TEXTURE_TRACE="${DREAM_TEXTURE_TRACE:-0}"
+export DREAM_LOOP_TRACE="${DREAM_LOOP_TRACE:-0}"
+echo "traces: input=$DREAM_INPUT_TRACE axis=$DREAM_INPUT_TRACE_AXIS load=$DREAM_LOAD_TRACE texture=$DREAM_TEXTURE_TRACE loop=$DREAM_LOOP_TRACE"
 export DREAM_LOG_LEVEL="${DREAM_LOG_LEVEL:-warn}"
 export RUST_BACKTRACE=1
 export TOR_AUDIO_SAMPLES=1024

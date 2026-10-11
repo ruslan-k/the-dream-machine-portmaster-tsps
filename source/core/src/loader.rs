@@ -592,12 +592,14 @@ impl<'gc> LoadManager<'gc> {
                 importer.finish_importing();
                 let (url, movie) = {
                     let pending = &context.load_manager.1[i];
-                    eprintln!(
-                        "dream_import_done url={} ticks={} elapsed_ms={:.1}",
-                        pending.url,
-                        pending.ticks,
-                        pending.started.elapsed().as_secs_f64() * 1000.0
-                    );
+                    if std::env::var("DREAM_LOAD_TRACE").as_deref() == Ok("1") {
+                        eprintln!(
+                            "dream_import_done url={} ticks={} elapsed_ms={:.1}",
+                            pending.url,
+                            pending.ticks,
+                            pending.started.elapsed().as_secs_f64() * 1000.0
+                        );
+                    }
                     (pending.url.clone(), pending.movie.clone())
                 };
                 // Keep the preloaded movie alive for later importers of the
@@ -608,13 +610,15 @@ impl<'gc> LoadManager<'gc> {
                     .push(CachedImportMovie { url, movie });
                 finished.push(i);
             } else if ticks % 600 == 0 {
-                let pending = &context.load_manager.1[i];
-                eprintln!(
-                    "dream_import_waiting url={} ticks={} elapsed_ms={:.1}",
-                    pending.url,
-                    pending.ticks,
-                    pending.started.elapsed().as_secs_f64() * 1000.0
-                );
+                if std::env::var("DREAM_LOAD_TRACE").as_deref() == Ok("1") {
+                    let pending = &context.load_manager.1[i];
+                    eprintln!(
+                        "dream_import_waiting url={} ticks={} elapsed_ms={:.1}",
+                        pending.url,
+                        pending.ticks,
+                        pending.started.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
             }
         }
         for i in finished.into_iter().rev() {

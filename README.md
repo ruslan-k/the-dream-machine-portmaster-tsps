@@ -58,11 +58,13 @@ Copy `port/The Dream Machine.sh` and `port/dreammachine` into the handheld's
 SSH shell. Existing `storage` must be preserved across updates.
 
 Controls: left stick or D-pad moves cursor; A left-click; B right-click;
-L slows cursor; Start+Select exits. Detailed logging is opt-in: `DREAM_LOG_LEVEL=info` and
-`DREAM_INPUT_TRACE=1`. The default keeps warnings/errors and FPS telemetry.
+L slows cursor; Start+Select exits. Detailed logging is opt-in: `DREAM_LOG_LEVEL=info`,
+`DREAM_INPUT_TRACE=1` (button events; `DREAM_INPUT_TRACE_AXIS=1` adds axis motion),
+`DREAM_LOAD_TRACE=1` (imported-asset load timings and cache hits), `DREAM_TEXTURE_TRACE=1`
+(texture decode) and `DREAM_LOOP_TRACE=1` (main-loop pacing). All traces default to off;
+the default keeps warnings/errors and FPS telemetry.
 Renderer A/B knobs: `DREAM_MSAA_SAMPLES=1|2|4` (default 1 = single-sample FBO,
-no multisampling; 4 = full-quality MSAA), `DREAM_CLICK_SYNC_MOVE`,
-`DREAM_LOAD_TRACE`, `DREAM_TEXTURE_TRACE` — see
+no multisampling; 4 = full-quality MSAA), `DREAM_CLICK_SYNC_MOVE` — see
 [docs/PERFORMANCE_AB.md](docs/PERFORMANCE_AB.md) for the device A/B procedure.
 
 ## Runtime build

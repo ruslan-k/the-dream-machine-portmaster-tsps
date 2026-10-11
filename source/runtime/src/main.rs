@@ -779,6 +779,7 @@ fn sdl2_main() {
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     // ── Main loop ─────────────────────────────────────────────────────────────
+    let loop_trace = std::env::var("DREAM_LOOP_TRACE").as_deref() == Ok("1");
     let mut loop_diag_last = Instant::now();
     'main: loop {
         let loop_t0 = Instant::now();
@@ -1026,7 +1027,7 @@ fn sdl2_main() {
                     .max(std::time::Duration::from_millis(1));
                 drop(p);
                 std::thread::sleep(wait);
-                if loop_diag_last.elapsed().as_secs_f64() >= 2.0 {
+                if loop_trace && loop_diag_last.elapsed().as_secs_f64() >= 2.0 {
                     let loop_t4 = Instant::now();
                     eprintln!(
                         "loop_ms recv={:.1} events={:.1} tick={:.1} sleep={:.1}",
