@@ -26,7 +26,7 @@ use ruffle_render::transform::Transform;
 use ruffle_render::filters::Filter;
 use std::any::Any;
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use swf::{BlendMode, Color, Fixed8, Twips};
 use thiserror::Error;
@@ -37,6 +37,13 @@ static FILTER_DUMP_SEQ: AtomicU32 = AtomicU32::new(0);
 static FILTER_META_SEQ: AtomicU32 = AtomicU32::new(0);
 const FILTER_DUMP_LIMIT: u32 = 8;
 const FILTER_META_LIMIT: u32 = 8;
+
+static SCRAPE_LAST_HASH: AtomicU64 = AtomicU64::new(0);
+static SCRAPE_SEQ: AtomicU32 = AtomicU32::new(0);
+/// Diagnostic: set when the scraped region changed (a blink/state change), so
+/// the filter dumps capture exactly the frames that produce changed content.
+static DUMP_ARMED: AtomicBool = AtomicBool::new(false);
+static DUMP_THIS_FRAME: AtomicBool = AtomicBool::new(false);
 
 fn filter_trace_enabled() -> bool {
     std::env::var("DREAM_FILTER_TRACE").as_deref() == Ok("1")
@@ -157,6 +164,10 @@ pub struct GlowRenderBackend {
     mult_color: Option<[f32; 4]>,
     add_color: Option<[f32; 4]>,
 
+    /// Scratch textures for filter compositing, pooled by size (see
+    /// `scratch_texture`).
+    scratch_pool: std::collections::HashMap<(u32, u32), BitmapHandle>,
+
     renderbuffer_width: i32,
     renderbuffer_height: i32,
     view_matrix: [[f32; 4]; 4],
@@ -195,6 +206,40 @@ impl RegistryData {
             let bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&compressed)
                 .expect("Locally compressed bitmap must decode");
             let inflate_ms = inflated.elapsed().as_secs_f64() * 1000.0;
+            // Diagnostic: dump small first-use uploads (eye strips etc.) so the
+            // decoded pixels (format + alpha) can be compared with the SWF art.
+            // Optional DREAM_UPLOAD_MAX overrides the size cap (for the larger
+            // character animation frames).
+            let up_max = std::env::var("DREAM_UPLOAD_MAX")
+                .ok()
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(160);
+            if std::env::var("DREAM_UPLOAD_DUMP").as_deref() == Ok("1")
+                && self.width <= up_max
+                && self.height <= up_max
+            {
+                static UP_SEQ2: AtomicU32 = AtomicU32::new(0);
+                let up_seq = UP_SEQ2.fetch_add(1, Ordering::Relaxed);
+                if up_seq < 400 {
+                    let dir = std::env::var("DREAM_FILTER_DUMP_DIR")
+                        .unwrap_or_else(|_| "logs".into());
+                    let bpp = if format == glow::RGBA { 4 } else { 3 };
+                    let tag = if bpp == 4 { "rgba" } else { "rgb" };
+                    let path = format!(
+                        "{dir}/upload-{up_seq:04}-{}x{}-{tag}.bin",
+                        self.width, self.height
+                    );
+                    let _ = std::fs::write(&path, &bytes);
+                    eprintln!(
+                        "dream_upload_dump seq={} w={} h={} bpp={} decoded={}",
+                        up_seq,
+                        self.width,
+                        self.height,
+                        bpp,
+                        bytes.len()
+                    );
+                }
+            }
             let texture = self.gl.create_texture().expect("Unable to create texture");
             self.gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             self.gl.tex_image_2d(glow::TEXTURE_2D, 0, format as i32,
@@ -333,6 +378,8 @@ impl GlowRenderBackend {
                 blend_modes: vec![],
                 mult_color: None,
                 add_color: None,
+
+                scratch_pool: std::collections::HashMap::new(),
 
                 viewport_scale_factor: 1.0,
             };
@@ -1012,6 +1059,9 @@ impl GlowRenderBackend {
                     glow::UNSIGNED_INT,
                     0,
                 );
+
+                // Diagnostic scrape (DREAM_SCRAPE=1).
+                self.scrape_present_region();
             }
         }
     }
@@ -1203,6 +1253,7 @@ impl RenderBackend for GlowRenderBackend {
         // black blobs, while text glows (blur ~5) only gain a readable dark
         // edge. Large-radius glows keep the unfiltered legacy look instead.
         const MAX_GLOW_BLUR: f32 = 8.0;
+        const MAX_BLUR_RADIUS: f32 = 24.0;
         match filter {
             Filter::GlowFilter(glow) => {
                 !glow.is_inner()
@@ -1211,6 +1262,12 @@ impl RenderBackend for GlowRenderBackend {
                     && glow.blur_y.to_f32() <= MAX_GLOW_BLUR
             }
             Filter::DropShadowFilter(shadow) => !shadow.is_inner() && !shadow.is_knockout(),
+            // Plain blurs are approximated as weighted offset copies (see
+            // apply_filter_in_place). Character animation layers (soft lids,
+            // shading) use these; drawing them raw makes hard dark blocks.
+            Filter::BlurFilter(blur) => {
+                blur.blur_x.to_f32() <= MAX_BLUR_RADIUS && blur.blur_y.to_f32() <= MAX_BLUR_RADIUS
+            }
             _ => false,
         }
     }
@@ -1307,6 +1364,8 @@ impl RenderBackend for GlowRenderBackend {
         // Bitmap-cached objects (including every object with a filter) render
         // into their own textures first, with their filters composited on top;
         // the main pass then draws those textures.
+        let armed = DUMP_ARMED.swap(false, Ordering::Relaxed);
+        DUMP_THIS_FRAME.store(armed, Ordering::Relaxed);
         for entry in cache_entries {
             self.render_cache_entry(entry);
         }
@@ -1357,6 +1416,35 @@ impl RenderBackend for GlowRenderBackend {
                 // If we're updating a resized texture, just redo the whole thing.
                 // We can't trivially map pixel regions as we use a filter to resize.
                 region = PixelRegion::for_whole_size(bitmap.width(), bitmap.height());
+            }
+
+            // Diagnostic: dump small uploads (eye strips etc.) to compare the
+            // decoded pixels against the SWF artwork.
+            if std::env::var("DREAM_UPLOAD_DUMP").as_deref() == Ok("1")
+                && bitmap.width() <= 160
+                && bitmap.height() <= 64
+            {
+                static UP_SEQ: AtomicU32 = AtomicU32::new(0);
+                let up_seq = UP_SEQ.fetch_add(1, Ordering::Relaxed);
+                if up_seq < 400 {
+                    let dir = std::env::var("DREAM_FILTER_DUMP_DIR")
+                        .unwrap_or_else(|_| "logs".into());
+                    let bpp = if format == glow::RGBA { 4 } else { 3 };
+                    let tag = if bpp == 4 { "rgba" } else { "rgb" };
+                    let path = format!(
+                        "{dir}/upload-{up_seq:04}-{}x{}-{tag}.bin",
+                        bitmap.width(),
+                        bitmap.height()
+                    );
+                    let _ = std::fs::write(&path, bitmap.data());
+                    eprintln!(
+                        "dream_upload_dump seq={} w={} h={} bpp={}",
+                        up_seq,
+                        bitmap.width(),
+                        bitmap.height(),
+                        bpp
+                    );
+                }
             }
 
             self.gl.tex_image_2d(
@@ -1600,10 +1688,22 @@ impl GlowRenderBackend {
         if !filter_trace_enabled() || width <= 0 || height <= 0 {
             return;
         }
-        let seq = FILTER_DUMP_SEQ.fetch_add(1, Ordering::Relaxed);
-        if seq >= FILTER_DUMP_LIMIT {
+        // Capture only the frames that produced changed content, and only for
+        // reasonably small entries (the face/limb sub-sprites); the big
+        // background entries are never the flicker source and are huge.
+        if !DUMP_THIS_FRAME.load(Ordering::Relaxed) {
             return;
         }
+        if width * height > 512 * 512 {
+            return;
+        }
+        let seq = FILTER_DUMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        if seq >= 6000 {
+            return;
+        }
+        // Force completion before reading back: a Mali readback can otherwise
+        // race the very writes this diagnostic is trying to observe.
+        self.gl.finish();
         let mut buf = vec![0u8; (width as usize) * (height as usize) * 4];
         self.gl.read_pixels(
             0,
@@ -1634,7 +1734,7 @@ impl GlowRenderBackend {
             seq, label, width, height, nonalpha, white, black
         );
         let dir = std::env::var("DREAM_FILTER_DUMP_DIR").unwrap_or_else(|_| "logs".into());
-        let path = format!("{}/filter-{:02}-{}.ppm", dir, seq, label);
+        let path = format!("{}/filter-{:05}-{}.ppm", dir, seq, label);
         if let Ok(mut f) = std::fs::File::create(&path) {
             use std::io::Write;
             let row_bytes = (width as usize) * 4;
@@ -1657,9 +1757,16 @@ impl GlowRenderBackend {
         if width <= 0 || height <= 0 {
             return;
         }
+        // The corruption appears in the very frame in which a filtered
+        // sub-cache is re-rendered; the end-of-frame arming always captures
+        // the following frame instead. Arm tracing/dumping right here so the
+        // re-render frame itself (its sub-draws and filter passes) is caught.
+        if !entry.filters.is_empty() && width <= 240 && height <= 480 {
+            DUMP_THIS_FRAME.store(true, Ordering::Relaxed);
+        }
         if filter_trace_enabled() {
             let mseq = FILTER_META_SEQ.fetch_add(1, Ordering::Relaxed);
-            if mseq < FILTER_META_LIMIT {
+            if mseq < FILTER_META_LIMIT || DUMP_THIS_FRAME.load(Ordering::Relaxed) {
                 let c = entry.clear;
                 eprintln!(
                     "cache_entry size={}x{} clear=({},{},{},{}) filters={}",
@@ -1680,12 +1787,39 @@ impl GlowRenderBackend {
                             g.is_knockout()
                         ),
                         Filter::DropShadowFilter(_) => eprintln!("  drop shadow"),
-                        _ => {}
+                        Filter::BlurFilter(b) => eprintln!(
+                            "  blur=({},{})",
+                            b.blur_x.to_f32(),
+                            b.blur_y.to_f32()
+                        ),
+                        Filter::BevelFilter(_) => eprintln!("  bevel"),
+                        Filter::ColorMatrixFilter(_) => eprintln!("  color matrix"),
+                        Filter::ConvolutionFilter(_) => eprintln!("  convolution"),
+                        Filter::DisplacementMapFilter(_) => eprintln!("  displacement map"),
+                        Filter::GradientBevelFilter(_) => eprintln!("  gradient bevel"),
+                        Filter::GradientGlowFilter(_) => eprintln!("  gradient glow"),
+                        _ => eprintln!("  other filter"),
                     }
                 }
             }
         }
         unsafe {
+            // The offscreen pass must render with a clean mask state: this
+            // function can run while an outer stencil mask is active, and
+            // executing the entry's commands under the inherited state
+            // shifted the mask depth counter, so the entry's own inner mask
+            // (the eye cut-out shape) tested against the wrong stencil level
+            // and wrote corrupted content into the sub-cache (the intermittent
+            // blink smear). Save, neutralize, and restore afterwards. The
+            // main target's stencil contents are untouched by the offscreen
+            // pass, so marking the state dirty re-applies the outer mask on
+            // the next main-target draw.
+            let saved_state = self.mask_state;
+            let saved_masks = self.num_masks;
+            self.mask_state = MaskState::NoMask;
+            self.num_masks = 0;
+            self.mask_state_dirty = true;
+
             self.bind_offscreen_target(data.texture(), width, height);
             if self.gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
                 log::error!("Couldn't bind bitmap cache framebuffer");
@@ -1707,7 +1841,19 @@ impl GlowRenderBackend {
 
             self.filter_debug_dump("A-object", width, height);
 
+            // The compositing/filter pass below and the main pass both sample
+            // this texture. On Mali a read issued right after the offscreen
+            // render can race the still-running tile writes, so the sampled
+            // copy occasionally bakes a half-written frame (this appeared as
+            // the intermittent corrupted face during eye blinks). Wait for the
+            // render to complete before anything reads the texture back.
+            self.gl.finish();
+
             self.unbind_offscreen_target();
+
+            self.mask_state = saved_state;
+            self.num_masks = saved_masks;
+            self.mask_state_dirty = true;
         }
 
         if std::env::var("DREAM_FILTER_MODE").as_deref() == Ok("object") {
@@ -1717,6 +1863,79 @@ impl GlowRenderBackend {
         for filter in &entry.filters {
             self.apply_filter_in_place(&entry.handle, filter);
         }
+    }
+
+    /// Read back the region of the default framebuffer the panel is about to
+    /// show and log a line whenever it changes (DREAM_SCRAPE=1). Used to
+    /// bisect panel glitches: corruption present here = renderer-side;
+    /// clean here while the panel glitches = below (SDL/KMS present path).
+    unsafe fn scrape_present_region(&self) {
+        if std::env::var("DREAM_SCRAPE").as_deref() != Ok("1") {
+            return;
+        }
+        const SCRAPE_X: i32 = 700;
+        const SCRAPE_Y: i32 = 0;
+        const SCRAPE_W: i32 = 180;
+        const SCRAPE_H: i32 = 380;
+        let mut buf = vec![0u8; (SCRAPE_W * SCRAPE_H * 4) as usize];
+        // Force full GPU completion before the readback: without it a Mali
+        // readback can race the resolve/composite and return a partial frame,
+        // which made the instrument itself look glitchy.
+        self.gl.finish();
+        self.gl.read_pixels(
+            SCRAPE_X,
+            SCRAPE_Y,
+            SCRAPE_W,
+            SCRAPE_H,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelPackData::Slice(Some(&mut buf)),
+        );
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in &buf {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        let prev = SCRAPE_LAST_HASH.load(Ordering::Relaxed);
+        if hash != prev {
+            let seq = SCRAPE_SEQ.fetch_add(1, Ordering::Relaxed);
+            eprintln!("dream_scrape seq={seq} hash={hash:016x} prev={prev:016x}");
+            let dir = std::env::var("DREAM_SCRAPE_DIR").unwrap_or_else(|_| "logs".into());
+            let path = format!("{dir}/scrape-{seq:06}-{hash:016x}.raw");
+            if std::fs::write(&path, &buf).is_ok() {
+                // Keep only the most recent dumps so a long run stays bounded:
+                // drop the dump that falls out of the 60-dump window.
+                if seq >= 60 {
+                    let old = format!("{dir}/scrape-{:06}-", seq - 59);
+                    if let Ok(rd) = std::fs::read_dir(&dir) {
+                        for e in rd.flatten() {
+                            if e.file_name().to_string_lossy().starts_with(&old) {
+                                let _ = std::fs::remove_file(e.path());
+                            }
+                        }
+                    }
+                }
+            }
+            SCRAPE_LAST_HASH.store(hash, Ordering::Relaxed);
+            // Arm the entry/filter dumps for the next rendered frame so the
+            // texture stages of exactly the changed content get captured.
+            DUMP_ARMED.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Pooled scratch texture for filter compositing, keyed by size. Creating
+    /// and deleting one per filtered object per frame churned GL names
+    /// continuously; Mali recycles names around in-flight deletes, which
+    /// showed up as one-frame garbage drawn over composited objects.
+    fn scratch_texture(&mut self, width: u32, height: u32) -> BitmapHandle {
+        if let Some(handle) = self.scratch_pool.get(&(width, height)) {
+            return handle.clone();
+        }
+        let handle = self
+            .create_empty_texture(width, height)
+            .expect("Unable to create scratch texture");
+        self.scratch_pool.insert((width, height), handle.clone());
+        handle
     }
 
     /// Composite one filter onto `handle`'s texture, in place.
@@ -1733,7 +1952,7 @@ impl GlowRenderBackend {
         if !self.is_filter_supported(filter) {
             return false;
         }
-        let (offsets, color) = match filter {
+        let (offsets, color, alpha_scale) = match filter {
             Filter::GlowFilter(glow) if !glow.is_inner() && !glow.is_knockout() => {
                 let r = glow.blur_x.to_f32().max(glow.blur_y.to_f32()).clamp(1.0, 8.0);
                 let mut offsets = Vec::new();
@@ -1745,13 +1964,39 @@ impl GlowRenderBackend {
                 };
                 ring(r * 0.45, 12, 0.0, &mut offsets);
                 ring(r * 0.9, 8, 0.3, &mut offsets);
-                (offsets, glow.color)
+                (offsets, glow.color, 1.0)
             }
             Filter::DropShadowFilter(shadow) if !shadow.is_inner() && !shadow.is_knockout() => {
                 let angle = shadow.angle.to_f32().to_radians();
                 let dx = shadow.distance.to_f32() * angle.cos();
                 let dy = shadow.distance.to_f32() * angle.sin();
-                (vec![(dx, dy)], shadow.color)
+                (vec![(dx, dy)], shadow.color, 1.0)
+            }
+            Filter::BlurFilter(blur) => {
+                // Approximate a gaussian blur with low-alpha offset copies.
+                // The copy on top (below) keeps the object readable while the
+                // surrounding taps soften its edges; without this the raw draw
+                // produces the hard dark blocks seen during eye blinks.
+                let r = blur.blur_x.to_f32().max(blur.blur_y.to_f32()).clamp(0.0, 24.0);
+                let mut offsets = Vec::new();
+                let ring = |radius: f32, n: usize, phase: f32, out: &mut Vec<(f32, f32)>| {
+                    for i in 0..n {
+                        let a = phase + (i as f32) * std::f32::consts::TAU / (n as f32);
+                        out.push((a.cos() * radius, a.sin() * radius));
+                    }
+                };
+                if r > 1.0 {
+                    ring(r * 0.45, 8, 0.0, &mut offsets);
+                    ring(r * 0.85, 10, 0.2, &mut offsets);
+                    ring(r * 1.25, 8, 0.5, &mut offsets);
+                }
+                let white = swf::Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                };
+                (offsets, white, 0.18)
             }
             _ => return false,
         };
@@ -1764,22 +2009,31 @@ impl GlowRenderBackend {
 
         // Drawing a texture into itself is undefined, so the object is copied
         // into a scratch texture first; the cache texture is then overwritten
-        // with the composite.
-        let Ok(temp) = self.create_empty_texture(data.width, data.height) else {
-            return false;
-        };
+        // with the composite. The scratch texture is pooled by size so no GL
+        // names are deleted and recreated while the GPU still references them.
+        let temp = self.scratch_texture(data.width, data.height);
         let temp_data = as_registry_data(&temp);
 
         let tint = swf::ColorTransform {
             r_multiply: Fixed8::from_f32(f32::from(color.r) / 255.0),
             g_multiply: Fixed8::from_f32(f32::from(color.g) / 255.0),
             b_multiply: Fixed8::from_f32(f32::from(color.b) / 255.0),
-            a_multiply: Fixed8::ONE,
+            a_multiply: Fixed8::from_f32(alpha_scale),
             r_add: 0,
             g_add: 0,
             b_add: 0,
             a_add: 0,
         };
+
+        // Our internal passes must not inherit the state left behind by the
+        // object's own content draws: a non-normal blend mode or a colour
+        // transform made the scratch copy and the composite produce a
+        // DIFFERENT result per frame for byte-identical input (measured:
+        // the same eye-strip rendered unchanged, darkened, or ghosted /
+        // smeared across frames — the visible blink corruption).
+        let saved_mult = self.mult_color.take();
+        let saved_add = self.add_color.take();
+        self.push_blend_mode(RenderBlendMode::Builtin(BlendMode::Normal));
 
         unsafe {
             // 1) Copy the object into the scratch texture.
@@ -1831,9 +2085,12 @@ impl GlowRenderBackend {
             self.filter_debug_dump("C-final", width, height);
 
             self.unbind_offscreen_target();
-
-            self.gl.delete_texture(temp_data.texture());
         }
+
+        self.pop_blend_mode();
+        self.mult_color = saved_mult;
+        self.add_color = saved_add;
+
         true
     }
 }
@@ -1849,6 +2106,35 @@ impl CommandHandler for GlowRenderBackend {
         unsafe {
             self.set_stencil_state();
             let entry = as_registry_data(&bitmap);
+            // Diagnostic: on armed frames (content changed = a blink), trace
+            // the draws landing in the character's face box and every small
+            // (eye/face-scale) bitmap, so the draw behind the corruption can
+            // be identified by size/transform/alpha/mask.
+            if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+                static DRAW_TRACE_SEQ: AtomicU32 = AtomicU32::new(0);
+                let tx = transform.matrix.tx.to_pixels() as f32;
+                let ty = transform.matrix.ty.to_pixels() as f32;
+                let in_face_box = tx > 600.0 && tx < 950.0 && ty > 260.0 && ty < 720.0;
+                let small = entry.width <= 240 && entry.height <= 480;
+                if in_face_box || small {
+                    let n = DRAW_TRACE_SEQ.fetch_add(1, Ordering::Relaxed);
+                    if n < 60000 {
+                        eprintln!(
+                            "draw_trace n={} size={}x{} tx={:.1} ty={:.1} scale=({:.3},{:.3}) alpha={:.3} smooth={} mask={:?}",
+                            n,
+                            entry.width,
+                            entry.height,
+                            tx,
+                            ty,
+                            transform.matrix.a,
+                            transform.matrix.d,
+                            transform.color_transform.a_multiply.to_f32(),
+                            smoothing,
+                            self.mask_state
+                        );
+                    }
+                }
+            }
             // Adjust the quad draw to use the target bitmap.
             let quad = &self.bitmap_quad_draws;
             let draw = &quad[0];
@@ -1957,6 +2243,29 @@ impl CommandHandler for GlowRenderBackend {
 
             let mesh = as_mesh(&shape);
             for draw in &mesh.draws {
+                if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+                    static SHAPE_TRACE: AtomicU32 = AtomicU32::new(0);
+                    let n = SHAPE_TRACE.fetch_add(1, Ordering::Relaxed);
+                    if n < 60000 {
+                        let kind = match &draw.draw_type {
+                            DrawType::Color => "color".to_string(),
+                            DrawType::Gradient(_) => "gradient".to_string(),
+                            DrawType::Bitmap(bd) => match &bd.handle {
+                                Some(h) => {
+                                    let d = as_registry_data(h);
+                                    format!("bitmap {}x{}", d.width, d.height)
+                                }
+                                None => "bitmap none".to_string(),
+                            },
+                        };
+                        eprintln!(
+                            "shape_trace #{} {} maskidx={} mst={:?} tx={:.0} ty={:.0} a={:.3} d={:.3}",
+                            n, kind, draw.num_mask_indices, self.mask_state,
+                            transform.matrix.tx.to_pixels(), transform.matrix.ty.to_pixels(),
+                            transform.matrix.a, transform.matrix.d
+                        );
+                    }
+                }
                 // Ignore strokes when drawing a mask stencil.
                 let num_indices = if self.mask_state != MaskState::DrawMaskStencil
                     && self.mask_state != MaskState::ClearMaskStencil
@@ -2054,6 +2363,25 @@ impl CommandHandler for GlowRenderBackend {
                             }
                         };
 
+                        if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+                            static BITMAP_UV_TRACE: AtomicU32 = AtomicU32::new(0);
+                            let n = BITMAP_UV_TRACE.fetch_add(1, Ordering::Relaxed);
+                            if n < 3000 {
+                                let m = &bitmap.matrix;
+                                eprintln!(
+                                    "bm_uv #{} world_tx={:.0} world_ty={:.0} world_s=({:.3},{:.3}) m=[[{:.4},{:.4},{:.4}],[{:.4},{:.4},{:.4}],[{:.4},{:.4},{:.4}]] smooth={}",
+                                    n,
+                                    transform.matrix.tx.to_pixels(),
+                                    transform.matrix.ty.to_pixels(),
+                                    transform.matrix.a, transform.matrix.d,
+                                    m[0][0], m[0][1], m[0][2],
+                                    m[1][0], m[1][1], m[1][2],
+                                    m[2][0], m[2][1], m[2][2],
+                                    bitmap.is_smoothed
+                                );
+                            }
+                        }
+
                         program.uniform_matrix3fv(
                             &self.gl,
                             ShaderUniform::TextureMatrix,
@@ -2106,6 +2434,17 @@ impl CommandHandler for GlowRenderBackend {
     }
 
     fn draw_rect(&mut self, color: Color, matrix: Matrix) {
+        if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+            static RECT_TRACE: AtomicU32 = AtomicU32::new(0);
+            let n = RECT_TRACE.fetch_add(1, Ordering::Relaxed);
+            if n < 60000 {
+                eprintln!(
+                    "rect_trace #{} c=({},{},{},{}) tx={:.0} ty={:.0} a={:.3} d={:.3}",
+                    n, color.r, color.g, color.b, color.a,
+                    matrix.tx.to_pixels(), matrix.ty.to_pixels(), matrix.a, matrix.d
+                );
+            }
+        }
         self.draw_quad::<{ glow::TRIANGLE_FAN }, -1>(color, matrix)
     }
 
@@ -2122,6 +2461,13 @@ impl CommandHandler for GlowRenderBackend {
     }
 
     fn push_mask(&mut self) {
+        if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+            static MASK_TRACE: AtomicU32 = AtomicU32::new(0);
+            let n = MASK_TRACE.fetch_add(1, Ordering::Relaxed);
+            if n < 20000 {
+                eprintln!("mask_trace #{} push depth->{}", n, self.num_masks + 1);
+            }
+        }
         debug_assert!(
             self.mask_state == MaskState::NoMask || self.mask_state == MaskState::DrawMaskedContent
         );
@@ -2131,18 +2477,39 @@ impl CommandHandler for GlowRenderBackend {
     }
 
     fn activate_mask(&mut self) {
+        if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+            static MASK_TRACE: AtomicU32 = AtomicU32::new(0);
+            let n = MASK_TRACE.fetch_add(1, Ordering::Relaxed);
+            if n < 20000 {
+                eprintln!("mask_trace #{} activate", n);
+            }
+        }
         debug_assert!(self.num_masks > 0 && self.mask_state == MaskState::DrawMaskStencil);
         self.mask_state = MaskState::DrawMaskedContent;
         self.mask_state_dirty = true;
     }
 
     fn deactivate_mask(&mut self) {
+        if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+            static MASK_TRACE: AtomicU32 = AtomicU32::new(0);
+            let n = MASK_TRACE.fetch_add(1, Ordering::Relaxed);
+            if n < 20000 {
+                eprintln!("mask_trace #{} deactivate", n);
+            }
+        }
         debug_assert!(self.num_masks > 0 && self.mask_state == MaskState::DrawMaskedContent);
         self.mask_state = MaskState::ClearMaskStencil;
         self.mask_state_dirty = true;
     }
 
     fn pop_mask(&mut self) {
+        if filter_trace_enabled() && DUMP_THIS_FRAME.load(Ordering::Relaxed) {
+            static MASK_TRACE: AtomicU32 = AtomicU32::new(0);
+            let n = MASK_TRACE.fetch_add(1, Ordering::Relaxed);
+            if n < 20000 {
+                eprintln!("mask_trace #{} pop depth->{}", n, self.num_masks - 1);
+            }
+        }
         debug_assert!(self.num_masks > 0 && self.mask_state == MaskState::ClearMaskStencil);
         self.num_masks -= 1;
         self.mask_state = if self.num_masks == 0 {
@@ -2159,9 +2526,31 @@ impl CommandHandler for GlowRenderBackend {
         self.pop_blend_mode();
     }
 
-    fn render_alpha_mask(&mut self, maskee_commands: CommandList, _mask_commands: CommandList) {
-        // TODO Add support for alpha masks
+    fn render_alpha_mask(&mut self, maskee_commands: CommandList, mask_commands: CommandList) {
+        // Alpha masks are approximated with the engine's stencil-mask
+        // machinery (the same protocol the vector masks use): the mask's
+        // content is drawn into the next stencil level, the maskee is drawn
+        // tested against it, and the mask is drawn a second time to decrement
+        // the level. The soft alpha falloff becomes a hard cut, but the
+        // maskee is confined to the mask's silhouette instead of rendering as
+        // its full rectangle. Previously this was an unimplemented TODO that
+        // executed the maskee unmasked — that was the visible corruption on
+        // sub-cached character layers during eye blinks.
+        let mask_clear = mask_commands.clone();
+        {
+            static ALPHA_MASK_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = ALPHA_MASK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 30 {
+                eprintln!("dream_alpha_mask called=#{n}");
+            }
+        }
+        self.push_mask();
+        mask_commands.execute(self);
+        self.activate_mask();
         maskee_commands.execute(self);
+        self.deactivate_mask();
+        mask_clear.execute(self);
+        self.pop_mask();
     }
 }
 
