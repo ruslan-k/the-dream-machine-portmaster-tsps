@@ -25,11 +25,37 @@ printf 'The Dream Machine Ruffle test: %s\n' "$(date)"
 [ -f "$GAMEDIR/gamedata/movie.swf" ] || { echo 'Missing gamedata/movie.swf'; exit 1; }
 # Upstream's multi-file frontend has a fixed content root. Expose SD data
 # using a symlink, not a 300 MB copy into the handheld's RAM-backed /tmp.
-if [ -e /tmp/gdata_ ] || [ -L /tmp/gdata_ ]; then
-  echo 'Content root /tmp/gdata_ already exists, refusing to replace it.'
-  exit 1
+# A run that dies mid-shutdown can leave /tmp/gdata_ behind: either our own
+# symlink (reuse it), or a real directory holding that run's final
+# SharedObject flush (save data). Never refuse to start over it: migrate any
+# saves from a stale real directory into the persistent SD tree first.
+if [ -L /tmp/gdata_ ]; then
+  if [ "$(readlink /tmp/gdata_)" != "$GAMEDIR/gamedata" ]; then
+    echo "Replacing foreign symlink /tmp/gdata_ -> $(readlink /tmp/gdata_)"
+    rm /tmp/gdata_
+  fi
+elif [ -d /tmp/gdata_ ]; then
+  echo 'Stale content root /tmp/gdata_ (directory); migrating saves to SD.'
+  if [ -d /tmp/gdata_/storage ]; then
+    mkdir -p "$GAMEDIR/gamedata/storage"
+    ( cd /tmp/gdata_/storage && find . -type f ) | while IFS= read -r rel; do
+      rel="${rel#./}"
+      src="/tmp/gdata_/storage/$rel"
+      dst="$GAMEDIR/gamedata/storage/$rel"
+      if [ -e "$dst" ] && cmp -s "$src" "$dst"; then continue; fi
+      mkdir -p "$(dirname "$dst")"
+      [ -e "$dst" ] && cp -p "$dst" "$dst.pre-rescue"
+      cp -p "$src" "$dst"
+      echo "  rescued $rel"
+    done
+    sync
+  fi
+  rm -rf /tmp/gdata_
+elif [ -e /tmp/gdata_ ]; then
+  echo 'Removing unexpected file at /tmp/gdata_; recreating content root.'
+  rm -f /tmp/gdata_
 fi
-ln -s "$GAMEDIR/gamedata" /tmp/gdata_ || exit 1
+[ -L /tmp/gdata_ ] || ln -s "$GAMEDIR/gamedata" /tmp/gdata_ || exit 1
 cleanup() {
   [ "$(readlink /tmp/gdata_ 2>/dev/null)" = "$GAMEDIR/gamedata" ] && rm /tmp/gdata_
   [ -n "${helper_pid:-}" ] && kill "$helper_pid" 2>/dev/null || true
