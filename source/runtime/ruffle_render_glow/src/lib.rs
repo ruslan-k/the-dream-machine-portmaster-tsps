@@ -23,11 +23,24 @@ use ruffle_render::tessellator::{
     Gradient as TessGradient, ShapeTessellator, Vertex as TessVertex,
 };
 use ruffle_render::transform::Transform;
+use ruffle_render::filters::Filter;
 use std::any::Any;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use swf::{BlendMode, Color, Twips};
+use swf::{BlendMode, Color, Fixed8, Twips};
 use thiserror::Error;
+
+/// Read back the bitmap-cache framebuffer as a PPM + compact pixel statistics.
+/// Diagnostics only; gated behind DREAM_FILTER_TRACE=1 and capped per session.
+static FILTER_DUMP_SEQ: AtomicU32 = AtomicU32::new(0);
+static FILTER_META_SEQ: AtomicU32 = AtomicU32::new(0);
+const FILTER_DUMP_LIMIT: u32 = 8;
+const FILTER_META_LIMIT: u32 = 8;
+
+fn filter_trace_enabled() -> bool {
+    std::env::var("DREAM_FILTER_TRACE").as_deref() == Ok("1")
+}
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -1175,6 +1188,62 @@ impl RenderBackend for GlowRenderBackend {
         }))
     }
 
+    fn is_offscreen_supported(&self) -> bool {
+        // Offscreen render targets drive bitmap caches and filters; the
+        // framebuffer machinery below is used for both.
+        true
+    }
+
+    fn is_filter_supported(&self, filter: &Filter) -> bool {
+        // Outer glows and drop shadows are composited as tinted offset copies
+        // (a hard outline); everything else is left to the core's fallback.
+        // Only small radii are accepted: the copies span up to ~0.9*blur and
+        // fill any interior holes or thin gaps of the object within that
+        // distance. Measured: a blur-11.8 title logo collapsed into solid
+        // black blobs, while text glows (blur ~5) only gain a readable dark
+        // edge. Large-radius glows keep the unfiltered legacy look instead.
+        const MAX_GLOW_BLUR: f32 = 8.0;
+        match filter {
+            Filter::GlowFilter(glow) => {
+                !glow.is_inner()
+                    && !glow.is_knockout()
+                    && glow.blur_x.to_f32() <= MAX_GLOW_BLUR
+                    && glow.blur_y.to_f32() <= MAX_GLOW_BLUR
+            }
+            Filter::DropShadowFilter(shadow) => !shadow.is_inner() && !shadow.is_knockout(),
+            _ => false,
+        }
+    }
+
+    fn apply_filter(
+        &mut self,
+        source: BitmapHandle,
+        _source_point: (u32, u32),
+        _source_size: (u32, u32),
+        destination: BitmapHandle,
+        _dest_point: (u32, u32),
+        filter: Filter,
+    ) -> Option<Box<dyn SyncHandle>> {
+        if !self.is_filter_supported(&filter) {
+            return None;
+        }
+        if source != destination {
+            self.copy_texture(&source, &destination);
+        }
+        if self.apply_filter_in_place(&destination, &filter) {
+            let (width, height) = {
+                let data = as_registry_data(&destination);
+                (data.width, data.height)
+            };
+            Some(Box::new(QueueSyncHandle {
+                texture: destination,
+                bounds: PixelRegion::for_whole_size(width, height),
+            }))
+        } else {
+            None
+        }
+    }
+
     fn viewport_dimensions(&self) -> ViewportDimensions {
         ViewportDimensions {
             width: self.renderbuffer_width as u32,
@@ -1235,8 +1304,11 @@ impl RenderBackend for GlowRenderBackend {
         commands: CommandList,
         cache_entries: Vec<BitmapCacheEntry>,
     ) {
-        if !cache_entries.is_empty() {
-            panic!("Bitmap caching is unavailable on the webgl backend");
+        // Bitmap-cached objects (including every object with a filter) render
+        // into their own textures first, with their filters composited on top;
+        // the main pass then draws those textures.
+        for entry in cache_entries {
+            self.render_cache_entry(entry);
         }
         self.begin_frame(clear);
         commands.execute(self);
@@ -1416,6 +1488,22 @@ impl RenderBackend for GlowRenderBackend {
                 glow::LINEAR as i32,
             );
 
+            // Allocate storage up front: empty textures are used as render
+            // targets (bitmap caches, filter scratch, resize targets) and are
+            // bound as framebuffer color attachments before any pixel upload;
+            // a texture with no storage leaves the framebuffer incomplete.
+            self.gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(None),
+            );
+
             Ok(BitmapHandle(Arc::new(RegistryData {
                 gl: self.gl.clone(),
                 width,
@@ -1424,6 +1512,329 @@ impl RenderBackend for GlowRenderBackend {
                 deferred: std::sync::Mutex::new(None),
             })))
         }
+    }
+}
+
+impl GlowRenderBackend {
+    /// Restore the view matrix used for the main (Y-flipped) render targets.
+    fn restore_view_matrix(&mut self) {
+        self.view_matrix = [
+            [1.0 / (self.renderbuffer_width as f32 / 2.0), 0.0, 0.0, 0.0],
+            [
+                0.0,
+                -1.0 / (self.renderbuffer_height as f32 / 2.0),
+                0.0,
+                0.0,
+            ],
+            [0.0, 0.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0, 1.0],
+        ];
+    }
+
+    /// Set up the offscreen framebuffer with `texture` as the color target and
+    /// the un-flipped view matrix that offscreen passes use.
+    unsafe fn bind_offscreen_target(&mut self, texture: glow::Texture, width: i32, height: i32) {
+        self.gl
+            .bind_framebuffer(glow::FRAMEBUFFER, Some(self.offscreen_framebuffer));
+        self.gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(texture),
+            0,
+        );
+        self.gl.viewport(0, 0, width, height);
+        self.view_matrix = [
+            [1.0 / (width as f32 / 2.0), 0.0, 0.0, 0.0],
+            [0.0, 1.0 / (height as f32 / 2.0), 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [-1.0, -1.0, 0.0, 1.0],
+        ];
+        self.active_program = std::ptr::null();
+        self.mask_state = MaskState::NoMask;
+        self.num_masks = 0;
+        self.mask_state_dirty = true;
+        self.mult_color = None;
+        self.add_color = None;
+    }
+
+    unsafe fn unbind_offscreen_target(&mut self) {
+        self.restore_view_matrix();
+        self.gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            None,
+            0,
+        );
+        self.gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+    }
+
+    /// Copy `src`'s texture into `dst`'s texture (a full-size blit).
+    fn copy_texture(&mut self, src: &BitmapHandle, dst: &BitmapHandle) {
+        let src_data = as_registry_data(src);
+        let dst_data = as_registry_data(dst);
+        let (width, height) = (src_data.width as i32, src_data.height as i32);
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        unsafe {
+            self.bind_offscreen_target(dst_data.texture(), width, height);
+            self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+            let mut copy = CommandList::new();
+            copy.render_bitmap(
+                src.clone(),
+                Transform::default(),
+                true,
+                PixelSnapping::Never,
+            );
+            copy.execute(self);
+            self.unbind_offscreen_target();
+        }
+    }
+
+    /// Read back the currently bound framebuffer as a PPM plus compact pixel
+    /// statistics. Diagnostics only; gated behind DREAM_FILTER_TRACE=1.
+    unsafe fn filter_debug_dump(&self, label: &str, width: i32, height: i32) {
+        if !filter_trace_enabled() || width <= 0 || height <= 0 {
+            return;
+        }
+        let seq = FILTER_DUMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        if seq >= FILTER_DUMP_LIMIT {
+            return;
+        }
+        let mut buf = vec![0u8; (width as usize) * (height as usize) * 4];
+        self.gl.read_pixels(
+            0,
+            0,
+            width,
+            height,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelPackData::Slice(Some(&mut buf)),
+        );
+        let mut nonalpha = 0usize;
+        let mut white = 0usize;
+        let mut black = 0usize;
+        for px in buf.chunks_exact(4) {
+            if px[3] > 8 {
+                nonalpha += 1;
+                if px[3] > 128 {
+                    if px[0] > 200 && px[1] > 200 && px[2] > 200 {
+                        white += 1;
+                    } else if px[0] < 48 && px[1] < 48 && px[2] < 48 {
+                        black += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "dream_filter_dump seq={} label={} size={}x{} nonalpha={} white={} black={}",
+            seq, label, width, height, nonalpha, white, black
+        );
+        let dir = std::env::var("DREAM_FILTER_DUMP_DIR").unwrap_or_else(|_| "logs".into());
+        let path = format!("{}/filter-{:02}-{}.ppm", dir, seq, label);
+        if let Ok(mut f) = std::fs::File::create(&path) {
+            use std::io::Write;
+            let row_bytes = (width as usize) * 4;
+            let _ = write!(f, "P6\n{} {}\n255\n", width, height);
+            for y in (0..height as usize).rev() {
+                let row = &buf[y * row_bytes..(y + 1) * row_bytes];
+                let mut rgb = Vec::with_capacity((width as usize) * 3);
+                for px in row.chunks_exact(4) {
+                    rgb.extend_from_slice(&px[..3]);
+                }
+                let _ = f.write_all(&rgb);
+            }
+            eprintln!("dream_filter_dump wrote {}", path);
+        }
+    }
+
+    fn render_cache_entry(&mut self, entry: BitmapCacheEntry) {
+        let data = as_registry_data(&entry.handle);
+        let (width, height) = (data.width as i32, data.height as i32);
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        if filter_trace_enabled() {
+            let mseq = FILTER_META_SEQ.fetch_add(1, Ordering::Relaxed);
+            if mseq < FILTER_META_LIMIT {
+                let c = entry.clear;
+                eprintln!(
+                    "cache_entry size={}x{} clear=({},{},{},{}) filters={}",
+                    data.width, data.height, c.r, c.g, c.b, c.a, entry.filters.len()
+                );
+                for f in &entry.filters {
+                    match f {
+                        Filter::GlowFilter(g) => eprintln!(
+                            "  glow blur=({},{}) strength={} color=({},{},{},{}) inner={} knockout={}",
+                            g.blur_x.to_f32(),
+                            g.blur_y.to_f32(),
+                            g.strength.to_f32(),
+                            g.color.r,
+                            g.color.g,
+                            g.color.b,
+                            g.color.a,
+                            g.is_inner(),
+                            g.is_knockout()
+                        ),
+                        Filter::DropShadowFilter(_) => eprintln!("  drop shadow"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        unsafe {
+            self.bind_offscreen_target(data.texture(), width, height);
+            if self.gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
+                log::error!("Couldn't bind bitmap cache framebuffer");
+                self.unbind_offscreen_target();
+                return;
+            }
+            self.gl.clear_color(
+                entry.clear.r as f32 / 255.0,
+                entry.clear.g as f32 / 255.0,
+                entry.clear.b as f32 / 255.0,
+                entry.clear.a as f32 / 255.0,
+            );
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+            self.gl.stencil_mask(0xff);
+            self.gl.clear(glow::STENCIL_BUFFER_BIT);
+            self.set_stencil_state();
+
+            entry.commands.execute(self);
+
+            self.filter_debug_dump("A-object", width, height);
+
+            self.unbind_offscreen_target();
+        }
+
+        if std::env::var("DREAM_FILTER_MODE").as_deref() == Ok("object") {
+            return;
+        }
+
+        for filter in &entry.filters {
+            self.apply_filter_in_place(&entry.handle, filter);
+        }
+    }
+
+    /// Composite one filter onto `handle`'s texture, in place.
+    ///
+    /// Outer glows and drop shadows are approximated with tinted copies of the
+    /// object at several offsets (a hard outline/offset) instead of a gaussian
+    /// blur. The cache texture is already grown by the core to fit the filter,
+    /// so the copies stay inside it. Returns false for unsupported filters.
+    fn apply_filter_in_place(&mut self, handle: &BitmapHandle, filter: &Filter) -> bool {
+        // Same predicate as the trait's is_filter_supported: the core only
+        // consults it on the AVM applyFilter path, so the display-object
+        // cache path must enforce it here too (large-radius glows must keep
+        // the unfiltered legacy look instead of collapsing into black blobs).
+        if !self.is_filter_supported(filter) {
+            return false;
+        }
+        let (offsets, color) = match filter {
+            Filter::GlowFilter(glow) if !glow.is_inner() && !glow.is_knockout() => {
+                let r = glow.blur_x.to_f32().max(glow.blur_y.to_f32()).clamp(1.0, 8.0);
+                let mut offsets = Vec::new();
+                let ring = |radius: f32, n: usize, phase: f32, out: &mut Vec<(f32, f32)>| {
+                    for i in 0..n {
+                        let a = phase + (i as f32) * std::f32::consts::TAU / (n as f32);
+                        out.push((a.cos() * radius, a.sin() * radius));
+                    }
+                };
+                ring(r * 0.45, 12, 0.0, &mut offsets);
+                ring(r * 0.9, 8, 0.3, &mut offsets);
+                (offsets, glow.color)
+            }
+            Filter::DropShadowFilter(shadow) if !shadow.is_inner() && !shadow.is_knockout() => {
+                let angle = shadow.angle.to_f32().to_radians();
+                let dx = shadow.distance.to_f32() * angle.cos();
+                let dy = shadow.distance.to_f32() * angle.sin();
+                (vec![(dx, dy)], shadow.color)
+            }
+            _ => return false,
+        };
+
+        let data = as_registry_data(handle);
+        let (width, height) = (data.width as i32, data.height as i32);
+        if width <= 0 || height <= 0 {
+            return false;
+        }
+
+        // Drawing a texture into itself is undefined, so the object is copied
+        // into a scratch texture first; the cache texture is then overwritten
+        // with the composite.
+        let Ok(temp) = self.create_empty_texture(data.width, data.height) else {
+            return false;
+        };
+        let temp_data = as_registry_data(&temp);
+
+        let tint = swf::ColorTransform {
+            r_multiply: Fixed8::from_f32(f32::from(color.r) / 255.0),
+            g_multiply: Fixed8::from_f32(f32::from(color.g) / 255.0),
+            b_multiply: Fixed8::from_f32(f32::from(color.b) / 255.0),
+            a_multiply: Fixed8::ONE,
+            r_add: 0,
+            g_add: 0,
+            b_add: 0,
+            a_add: 0,
+        };
+
+        unsafe {
+            // 1) Copy the object into the scratch texture.
+            self.bind_offscreen_target(temp_data.texture(), width, height);
+            self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+            let mut copy = CommandList::new();
+            copy.render_bitmap(
+                handle.clone(),
+                Transform::default(),
+                true,
+                PixelSnapping::Never,
+            );
+            copy.execute(self);
+
+            self.filter_debug_dump("B-copy", width, height);
+
+            // 2) Overwrite the object's texture with the tinted copies at the
+            //    filter offsets, then the object itself on top
+            //    (compositeSource).
+            self.bind_offscreen_target(data.texture(), width, height);
+            self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+            let mut composite = CommandList::new();
+            for (dx, dy) in &offsets {
+                composite.render_bitmap(
+                    temp.clone(),
+                    Transform {
+                        matrix: Matrix {
+                            tx: Twips::from_pixels(f64::from(*dx)),
+                            ty: Twips::from_pixels(f64::from(*dy)),
+                            ..Default::default()
+                        },
+                        color_transform: tint,
+                        ..Default::default()
+                    },
+                    true,
+                    PixelSnapping::Never,
+                );
+            }
+            composite.render_bitmap(
+                temp.clone(),
+                Transform::default(),
+                true,
+                PixelSnapping::Never,
+            );
+            composite.execute(self);
+
+            self.filter_debug_dump("C-final", width, height);
+
+            self.unbind_offscreen_target();
+
+            self.gl.delete_texture(temp_data.texture());
+        }
+        true
     }
 }
 
