@@ -84,6 +84,14 @@ export DREAM_LOAD_TRACE="${DREAM_LOAD_TRACE:-0}"
 export DREAM_TEXTURE_TRACE="${DREAM_TEXTURE_TRACE:-0}"
 export DREAM_LOOP_TRACE="${DREAM_LOOP_TRACE:-0}"
 echo "traces: input=$DREAM_INPUT_TRACE axis=$DREAM_INPUT_TRACE_AXIS load=$DREAM_LOAD_TRACE texture=$DREAM_TEXTURE_TRACE loop=$DREAM_LOOP_TRACE"
+# Filter-cache diagnostics (opt-in): DREAM_FILTER_TRACE=1 dumps each bitmap
+# cache texture (object / scratch copy / composited result) to
+# DREAM_FILTER_DUMP_DIR as PPM + pixel stats; DREAM_FILTER_MODE=object skips
+# the filter composite to isolate what the cache render alone produces.
+export DREAM_FILTER_TRACE="${DREAM_FILTER_TRACE:-0}"
+export DREAM_FILTER_DUMP_DIR="${DREAM_FILTER_DUMP_DIR:-$GAMEDIR/logs}"
+export DREAM_FILTER_MODE="${DREAM_FILTER_MODE:-full}"
+echo "filter_diag: trace=$DREAM_FILTER_TRACE mode=$DREAM_FILTER_MODE dir=$DREAM_FILTER_DUMP_DIR"
 export DREAM_LOG_LEVEL="${DREAM_LOG_LEVEL:-warn}"
 export RUST_BACKTRACE=1
 export TOR_AUDIO_SAMPLES=1024
