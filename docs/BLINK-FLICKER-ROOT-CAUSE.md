@@ -121,3 +121,51 @@ With the character live in the scene (blinks re-rendering the eye layer),
 capture the eye-fill's matrix (world_tx~30/ty~27, 341x339) and diff it
 against the working room fills to pinpoint the transform divergence.
 Launcher env: `DREAM_FILTER_TRACE=1 DREAM_UPLOAD_DUMP=1 DREAM_UPLOAD_MAX=400`.
+
+---
+
+# Update: conclusion — the artifact is the GAME'S OWN (filters25-27 sessions)
+
+## What was verified this round (all measured)
+
+- SWF ground truth: the 113x76 entry = mask + bitmap-fill shapes 312/398
+  filling bitmap 231 (341x339, DefineBitsLossless2). Raw fill matrix
+  (from the swf crate dump): a=-10.107 b=17.239 c=-17.239 d=-10.107
+  tx=5405 ty=-1610, smooth=true, **repeat=true** — an authored ~20x
+  scaled, 120-degree-rotated, TILED fill. The engine's gl matrix for the
+  draw matches the file exactly (5-decimal match on the logged matrix).
+- Textures: every first-use upload (25 of them, JPEG3 frames + the
+  lossless2 231) is pixel-perfect vs the extracted art (0.00% pixels
+  differing at threshold 60; single best match each). The lazy bitmap
+  pipeline is proven correct.
+- Pinned core patches (display_object.rs, movie_clip.rs, loader.rs,
+  player.rs, library.rs) affect only asset import/photoloader logic,
+  nothing render-related.
+- The backend's per-draw texture setup (MAG/MIN filter by is_smoothed,
+  WRAP = REPEAT when is_repeating else CLAMP_TO_EDGE) matches the
+  reference WebGL renderer line for line (incl. the GL2 condition).
+- The glitch = drawn for the frames in which the 232x448 body cache
+  re-render+draw happens; blob state (8a9c) and clean state (cd7d)
+  alternate with byte-identical dumps — the deviation is in WHICH
+  authored content is composited, not in our pipeline.
+
+## Reference footage
+
+A 2017 let's-play of the original runtime (pre-Ruffle; video Y6clI-YH55I,
+uploaded 2017-05-05) shows the SAME signature artifact: a hard-edged
+rectangular smear replacing the character's head texture for single
+frames during animation (observed at abs t~754.6-754.9s, back of head,
+and t~794.3-794.6s, lower head/face). Caveat: single-frame blocky smears
+in low-bitrate video can also be h264 artifacts; two independent hits
+exactly on the head during animation plus the full internal consistency
+of our render argue engine-level.
+
+## Conclusion
+
+The rectangular head-smear flicker is (high confidence) the original
+game's own cosmetic artifact; Ruffle and this port reproduce it
+faithfully. Nothing in the port deviates from the authored data.
+Possible follow-ups if 100% certainty is wanted: run the original AIR
+build under Wine, or another modern capture; optional port-side
+deviation: suppress the 312/398 layer fills (env-gated) and verify
+nothing needed is lost (owner decision).
